@@ -24,7 +24,6 @@ Encrypts the flag with AES-ECB and PKCS#7 padding.
 The weakness: the LCG's multiplier, increment and modulus are the RSA prime factors, and the LCG outputs are public. Recovering the LCG parameters factors n.
 
 2. Recover:
-
 r
 Let d_i = s_{i+1} − s_i. Subtracting consecutive LCG steps removes q:
 d_{i+1} ≡ p · d_i   (mod r)
@@ -54,7 +53,8 @@ python
 e = 0x10001
 phi = (p - 1) * (q - 1) * (r - 1)
 d = pow(e, -1, phi)
-5. Derive the AES key and decrypt
+
+5. Derive the AES key and decrypt:
 python
 from hashlib import sha256
 from Crypto.Cipher import AES
