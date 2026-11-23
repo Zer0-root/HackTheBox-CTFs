@@ -1,150 +1,85 @@
-Hack The Box: BabyEncryption Challenge - Writeup
-Repository Purpose  
+HTB — BabyEncryption
+Category	Difficulty	Platform	Date compiled
+Cryptography	Very Easy	Hack The Box	March 2026
 
-This writeup documents the complete end-to-end process of solving the BabyEncryption crypto challenge on Hack The Box. It demonstrates offensive security research, methodical cryptanalysis, code reversal, and iterative problem-solving skills. All steps were performed for educational purposes only.
+Skills demonstrated: source code review, affine cipher inversion, modular arithmetic, Python byte/hex handling.
 
-Challenge Metadata  
+Summary
 
-Name: BabyEncryption  
+The challenge provides an encryption script (chall.py) and its hex-encoded output (msg.enc). The script encrypts each byte with a fixed affine transformation, ct = (123 · pt + 18) mod 256. Because gcd(123, 256) = 1, the transformation is invertible. Computing the modular inverse of 123 and applying the inverse transformation to each byte recovers the plaintext and the flag.
 
-Category: Cryptography  
+Tools
+Python 3 (built-in pow(a, -1, m) for the modular inverse, available since Python 3.8)
+Walkthrough
+1. Source code review
+python
+import string
+from secret import MSG
 
-Difficulty: Very Easy  
+def encryption(msg):
+    ct = []
+    for char in msg:
+        ct.append((123 * char + 18) % 256)
+    return bytes(ct)
 
-Platform: Hack The Box  
+ct = encryption(MSG)
+f = open('./msg.enc','w')
+f.write(ct.hex())
+f.close()
 
-Objective: Recover the plaintext flag by reversing a custom encryption routine
+Observations:
 
-1. Initial Reconnaissance & Walkthrough
-I began by creating a comprehensive structured advisory walkthrough (following HTB mentor best practices):
+Each plaintext byte is encrypted on its own with the same fixed parameters a = 123 and b = 18. There is no key, IV or position dependence.
+The result is an affine cipher over bytes, which is in effect a fixed 256-entry substitution table.
+The output is hex-encoded into msg.enc.
+2. Invertibility
 
-Analyzed the expected encryption logic (affine cipher variant: ct = (a * pt + b) % 256).
+An affine map x → a·x + b (mod m) is invertible if and only if gcd(a, m) = 1. Here 123 is odd and 256 is a power of 2, so gcd(123, 256) = 1.
 
-Identified the vulnerability class: weak custom encryption with fixed, public parameters.
+python
+>>> pow(123, -1, 256)
+179
 
-Derived the modular inverse for decryption.
+Check: 123 · 179 = 22017 = 86 · 256 + 1.
 
-Outlined enumeration strategy, attack path, exploitation logic, and defensive takeaways.
+Decryption formula:
 
-This served as the baseline methodology before receiving actual challenge files.
+pt ≡ 179 · (ct − 18)  (mod 256)
+3. Decryption
+python
+ct = bytes.fromhex(open("msg.enc").read().strip())
 
-Key Insight from Initial Walkthrough  
+A_INV, B = pow(123, -1, 256), 18
+pt = bytes((A_INV * (c - B)) % 256 for c in ct)
 
-The cipher is fully invertible because gcd(123, 256) == 1, allowing computation of the modular inverse via pow(123, -1, 256).
-
-2. Challenge Files Received & Analysis
-The user provided two iterations of files during the engagement:
-
-First Iteration
-msg.enc (hex):  
-  6e0a9372ec49a3f6930ed8723f9df6f6720ed8d89dc4937222ec7214d89d1e0e352ce0aa6ec82bf622227bb70e7fb7352249b7d893c493d8539dec8fb7936d490e7f9d22ec89b7a322ec8fd80e7f8921
-
-Assumed encryption constant: +18 (based on standard BabyEncryption variant).
-Second Iteration (Corrected)
-Full chall.py source:
-  ```python
-
-  import string
-
-  from secret import MSG
-
-  def encryption(msg):
-
-      ct = []
-
-      for char in msg:
-
-          ct.append((123 * char + 19) % 256)   # ← Note: +19 (not +18)
-
-      return bytes(ct)
-
-  ct = encryption(MSG)
-
-  f = open('./msg.enc','w')
-
-  f.write(ct.hex())
-
-  f.close()
-
-  ```
-
-Updated msg.enc (hex):  
-  6e0a9372ec49a3f6930ed8723f9df6f6720ed8d89dc4937222ec7214d89d1e0e352ce0aa6ec82bf622227bb70e7fb7352249b7d893c493d8539dec8fb7935d490e7f9d22ec89b7a322ec8fd80e7f8921
-
-Critical Observation  
-
-The additive constant changed from +18 to +19. This required immediate adaptation of the decryption formula.
-
-3. Exploitation & Decryption Process
-Decryption Logic
-The encryption is an affine transformation:  
-
-ct ≡ (123 ⋅ pt + 19) (mod 256)
-
-Reversed algebraically:  
-
-pt ≡ 179 ⋅ (ct - 19) (mod 256)  
-
-(where 179 is the modular inverse of 123 modulo 256).
-
-Python Decryption Script (Final Version)
-
-ct_hex = "6e0a9372ec49a3f6930ed8723f9df6f6720ed8d89dc4937222ec7214d89d1e0e352ce0aa6ec82bf622227bb70e7fb7352249b7d893c493d8539dec8fb7935d490e7f9d22ec89b7a322ec8fd80e7f8921"
-
-ct = bytes.fromhex(ct_hex)
-
-  
-
-pt = []
-
-for c in ct:
-
-    pt_byte = (179 * (c - 19)) % 256
-
-    pt.append(pt_byte)
-
-  
-
-plaintext = bytes(pt).decode('ascii')
-
-print(plaintext)
+print(pt.decode("ascii"))
 
 Output:
 
-
 Th3 nucl34r w1ll 4rr1v3 0n fr1d4y.
-
 HTB{REDACTED}
+4. Alternative approaches
 
-4. Flags Obtained
-| Iteration | Flag |
+These do not depend on deriving the inverse:
 
-|-----------|------|
+Lookup table: precompute {(123 * p + 18) % 256: p for p in range(256)} and map each ciphertext byte back. This is simpler and works for any bijective byte map.
+Known plaintext: with the source unavailable, the known flag prefix HTB{ gives enough plaintext–ciphertext pairs to solve for a and b.
+5. Flag
+HTB{REDACTED}
+Root cause
 
-| First (with +18) | HTB{REDACTED} |
+Custom ("roll-your-own") encryption with no secret key (CWE-327, Use of a Broken or Risky Cryptographic Algorithm). The parameters are public in the source, and the cipher is a deterministic per-byte substitution. Anyone with the source decrypts directly. Even without the source, a single-byte substitution cipher falls to known-plaintext or frequency analysis.
 
-| Second (correct +19) | HTB{REDACTED} |
+Defensive takeaways
+Use a vetted authenticated encryption scheme (for example AES-GCM or ChaCha20-Poly1305) from a maintained library instead of custom arithmetic.
+Security must rest on a secret key, never on the secrecy of the algorithm (Kerckhoffs's principle).
+Per-byte deterministic encryption leaks structure: identical plaintext bytes produce identical ciphertext bytes.
+Key lessons
+Check invertibility first. For an affine cipher, gcd(a, m) = 1 is all it takes to decrypt.
+Derive constants from the actual source, and validate them by checking that the decrypted output is readable.
+References
+Python docs — pow() with a negative exponent (modular inverse)
+Wikipedia — Affine cipher
+Wikipedia — Kerckhoffs's principle
 
-Challenge Completed ✅
-
-5. Skills Demonstrated
-Cryptanalysis: Rapid identification and reversal of a linear modular cipher.
-
-Code Review: Spotting subtle differences in encryption constants between assumed and actual code.
-
-Iterative Problem-Solving: Adapting the attack in real-time when new files were provided.
-
-Python Scripting: Clean, efficient decryption script with proper byte/hex handling.
-
-Documentation: Clear, professional writeup suitable for a penetration testing portfolio or team knowledge base.
-
-Mentoring Mindset: Started with a full educational walkthrough before diving into the specific instance.
-
-6. Lessons Learned & Recommendations
-Never hard-code assumptions about constants — always validate against the actual source.
-
-Modular inverses make affine ciphers trivial to break when parameters are known.
-
-In real engagements, this highlights the danger of "roll-your-own" crypto.
-
-This repository showcases methodical crypto reversing skills for educational and professional demonstration purposes.
+Performed against an HTB challenge for educational purposes.
