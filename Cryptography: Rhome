@@ -1,0 +1,105 @@
+HTB — Rhome
+Category	Difficulty	Platform	Date compiled
+Cryptography	Easy	Hack The Box	March 2026
+Skills demonstrated: Diffie-Hellman parameter analysis, small-subgroup confinement, discrete-log solving with Baby-Step Giant-Step (BSGS), AES-ECB decryption.
+
+Summary:
+The service runs a deliberately weak Diffie-Hellman exchange. The prime is built as p = 2·q·r + 1 with q a ~42-bit prime, and the generator is forced into the order-q subgroup. Because g has small order, a public key A = g^a mod p leaks a mod q, which BSGS recovers in about √q ≈ 2²¹ operations. From there the shared secret, and the AES key derived from it, fall out, and the flag decrypts.
+
+Recon:
+The instance provides server.py. The weakness is in parameter generation:
+
+python
+p = 2 * q * r + 1          # q is a ~42-bit prime
+g = pow(h, 2*r, p)         # g confined to the subgroup of order q
+
+Encryption flow:
+
+shared secret ss = pow(A, b, p) (equivalently pow(B, a, p))
+key = sha256(long_to_bytes(ss)).digest()[:16]
+flag encrypted with AES-ECB + PKCS#7 padding
+
+Confirmation of confinement: pow(g, q, p) == 1 (g has order q), and (p-1)//2 == q·r factors into a tiny q.
+Attack — small-subgroup confinement
+
+1. Collect session data:
+
+Connect once with nc and, in the same session, pull the parameters (p, g, A, B) and the ciphertext. Mixing data across reconnects gives a key that won't decrypt — see the padding-error note below.
+
+2. Recover the subgroup order q:
+python
+from sympy import factorint
+
+n = (p - 1) // 2            # = q * r
+factors = factorint(n)
+# Select the ~42-bit prime factor whose order matches g — not simply min(),
+# which breaks if r has a smaller prime factor.
+q = next(f for f in factors if pow(g, f, p) == 1)
+
+The draft used q = min(factors.keys()). That happens to work only if r has no prime factor smaller than q. Selecting the factor f with pow(g, f, p) == 1 is correct regardless of how r factors.
+
+3. Solve the discrete log with BSGS:
+
+Because g has order q, A = g^a only determines a mod q, and BSGS runs in O(√q):
+
+python
+import math
+
+def bsgs(g, h, p, order):
+    m = math.isqrt(order) + 1
+    baby = {}
+    cur = 1
+    for i in range(m):
+        baby[cur] = i
+        cur = (cur * g) % p
+    factor = pow(pow(g, m, p), -1, p)   # g^(-m) mod p
+    cur = h % p
+    for j in range(m):
+        if cur in baby:
+            return (baby[cur] + j * m) % order
+        cur = (cur * factor) % p
+    return None
+
+4. Rebuild the shared secret and AES key:
+python
+from hashlib import sha256
+
+a_mod_q = bsgs(g, A, p, q)
+ss = pow(B, a_mod_q, p)        # B^(a mod q) == g^(ab) within the order-q subgroup
+key = sha256(ss.to_bytes((ss.bit_length() + 7) // 8, 'big')).digest()[:16]
+
+This works because every value lives in the subgroup of order q, so B^(a mod q) ≡ g^(ab) ≡ ss (mod p) even though only a mod q is known.
+
+5. Decrypt:
+python
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
+pt = unpad(AES.new(key, AES.MODE_ECB).decrypt(bytes.fromhex(ciphertext)), 16)
+print(pt.decode())
+
+Flag:
+HTB{REDACTED}
+
+Root cause:
+
+Small-subgroup confinement (CWE-327, weak crypto parameters). DH security depends on the order of the generator's subgroup, not the size of p. Forcing g into a 42-bit-order subgroup makes the private exponent recoverable mod q by a square-root-time discrete-log attack, which is trivial at this size.
+
+Defensive takeaways:
+Use standardized DH groups (RFC 7919 / RFC 3526) or move to ECDH.
+Validate parameters: reject a generator whose subgroup order is not a large prime (order(g) > 2²⁵⁶), and verify received public keys lie in the correct subgroup.
+Don't derive keys from raw DH output without a proper KDF, and don't use AES-ECB.
+Operational note
+A ValueError: Padding is incorrect here almost always means a session mismatch — parameters from one nc connection, ciphertext from another. 
+The server regenerates per session, so collect p, g, A, B and the ciphertext in one connection. (Environment fixes on Kali: pip install into a venv, or apt install python3-sympy python3-pycryptodome for the externally-managed-environment error.)
+
+Key lessons:
+A large prime p does not imply a hard discrete log — the generator's subgroup order is what matters.
+A short-order generator leaks the private exponent mod that order; BSGS finishes in square-root time.
+Verify the flag against the decryption output, not the vulnerability's name.
+
+References:
+BSGS — Baby-step giant-step (Wikipedia)
+Small subgroup confinement attack (Wikipedia)
+RFC 7919 — Negotiated FFDHE groups
+
+Performed against an HTB challenge for educational purposes.
