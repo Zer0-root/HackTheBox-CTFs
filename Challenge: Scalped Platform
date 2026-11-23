@@ -1,22 +1,24 @@
 HTB — Scalped Platform
 Category	Difficulty	Platform	Date compiled
 Hardware / Embedded forensics	Very Easy	Hack The Box	2026
-
 Skills demonstrated: U-Boot console use, I²C bus enumeration, EEPROM forensics, internal address-width troubleshooting, AES-256-CBC decryption.
 
-Summary
+Summary:
+The challenge exposes the U-Boot console of a satellite on-board computer (OBC) that can no longer boot. 
+Two EEPROMs survive on separate I²C buses. The bus 1 EEPROM holds a corrupted backup U-Boot environment containing an encrypted_flag variable.
+The bus 0 EEPROM appears erased when read with two-byte internal addressing. Switching to one-byte addressing (i2c olen 0x50 1) exposes an AES-256-CBC key and IV stored in plaintext, which decrypt the flag.
 
-The challenge exposes the U-Boot console of a satellite on-board computer (OBC) that can no longer boot. Two EEPROMs survive on separate I²C buses. The bus 1 EEPROM holds a corrupted backup U-Boot environment containing an encrypted_flag variable. The bus 0 EEPROM appears erased when read with two-byte internal addressing. Switching to one-byte addressing (i2c olen 0x50 1) exposes an AES-256-CBC key and IV stored in plaintext, which decrypt the flag.
+Challenge description:
+A satellite On-Board Computer (OBC) was recovered from a damaged flatsat, but critical components are missing and the system can no longer complete its boot sequence. 
+While the hardware appears unusable, traces of its previous configuration may still remain. Investigate the abandoned onboard computer and recover what was left behind.
 
-Challenge description
-
-A satellite On-Board Computer (OBC) was recovered from a damaged flatsat, but critical components are missing and the system can no longer complete its boot sequence. While the hardware appears unusable, traces of its previous configuration may still remain. Investigate the abandoned onboard computer and recover what was left behind.
-
-Tools
+Tools:
 nc — connecting to the U-Boot console
 U-Boot i2c commands — bus selection, probing, offset-length configuration, memory dumps
 OpenSSL — AES-256-CBC decryption
-Walkthrough
+
+Walkthrough:
+
 1. Initial reconnaissance
 bash
 nc -nv <TARGET_IP> <PORT>
@@ -33,7 +35,7 @@ U-Boot also reports no MMC card, SPI flash or USB device, then drops to an inter
 
 With no boot media present, the task is to inspect the surviving non-volatile storage, not to restore the operating system. The two warnings point to two EEPROMs: one reported as erased, and one with a corrupted environment.
 
-2. I²C enumeration
+2. I²C enumeration:
 => i2c bus
 => i2c dev 1
 => i2c probe
@@ -45,7 +47,7 @@ Address	Likely device	Basis
 
 The EEPROM at 0x50 is the primary target, because both boot warnings reference loading the environment from EEPROM.
 
-3. Backup environment (bus 1, offset 0x800)
+3. Backup environment (bus 1, offset 0x800):
 => i2c dev 1
 => i2c md 0x50 0x0800.2 0x100
 
@@ -61,7 +63,8 @@ The encrypted_flag value is 32 bytes, which is consistent with two AES blocks. I
 The ciphertext can also be read on its own at offset 0x880:
 
 => i2c md 0x50 0x0880.2 0x80
-4. Key material (bus 0, one-byte addressing)
+
+4. Key material (bus 0, one-byte addressing):
 
 Reading the bus 0 EEPROM with two-byte internal addressing returned only 0xFF, which appeared to confirm the "EEPROM erased" warning:
 
@@ -78,10 +81,9 @@ IV=813b320e…[REDACTED]
 AES_MODE=CBC
 
 The key is 32 bytes (AES-256) and the IV is 16 bytes. The values are truncated here so that the write-up does not publish the means to decrypt the flag.
-
 i2c olen changes only how U-Boot addresses the chip during the session. It does not write to the EEPROM, so the investigation remained read-only.
 
-5. Decryption
+5. Decryption:
 bash
 echo -n '<ENCRYPTED_FLAG_HEX>' \
   | xxd -r -p \
@@ -93,28 +95,29 @@ If xxd is unavailable, python3 -c "import sys; sys.stdout.buffer.write(bytes.fro
 
 OpenSSL removes the PKCS#7 padding by default. The output is a 26-byte plaintext in HTB{...} format.
 
-6. Flag
+6. Flag:
 HTB{REDACTED}
-Root cause
 
+Root cause:
 Two compounding failures:
-
 Incomplete sanitization of persistent storage (CWE-1330, Remanent Data Readable after Memory Erase). The bus 0 EEPROM was not actually erased. Data survived outside the region that the default read covered.
-Encryption key stored in plaintext beside the ciphertext (CWE-312, Cleartext Storage of Sensitive Information; CWE-321, Use of Hard-coded Cryptographic Key). Anyone with console access to both EEPROMs holds everything needed to decrypt, so the encryption added no protection.
-
+Encryption key stored in plaintext beside the ciphertext (CWE-312, Cleartext Storage of Sensitive Information; CWE-321, Use of Hard-coded Cryptographic Key). 
+Anyone with console access to both EEPROMs holds everything needed to decrypt, so the encryption added no protection.
 An exposed, unauthenticated bootloader console (CWE-1191, On-Chip Debug and Test Interface with Improper Access Control) made both reachable.
 
-Defensive takeaways
+Defensive takeaways:
 Protect key material in hardware: use a secure element, the SoC's eFuse/OTP key storage or a TPM rather than plain EEPROM, and never store a key on the same accessible medium as the data it protects.
 Verify erasure across the full address space: write and read back every byte at the device's correct address width. A read returning 0xFF under the wrong addressing mode does not prove a wipe.
 Lock down the bootloader: disable or password-protect the U-Boot console in production (for example with CONFIG_AUTOBOOT_KEYED and a non-interactive bootdelay), and restrict debug interfaces.
 Authenticate the environment: use a read-only or signed U-Boot environment so that a corrupted or tampered one is rejected rather than inspected.
-Key lessons
+
+Key lessons:
 A device that cannot boot can still give up its data. Boot failure is not data destruction.
 Check EEPROM addressing assumptions. The wrong internal address width can make retained data look erased.
 A CRC failure means the environment is unusable as a whole, not that its contents are gone.
 Read-only inspection first: everything needed came from U-Boot's i2c read commands without modifying storage.
-References
+
+References:
 U-Boot documentation — i2c command
 U-Boot documentation — Environment variables
 MITRE CWE-1330 — Remanent Data Readable after Memory Erase
