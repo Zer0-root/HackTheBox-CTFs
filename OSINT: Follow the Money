@@ -4,7 +4,9 @@ OSINT (blockchain forensics)	Easy	Hack The Box	March 2026
 Skills demonstrated: blockchain transaction tracing, address clustering, mixer detection, exchange-KYC attribution, tool chaining across a provided analytics environment.
 
 Summary:
-The scenario is a cryptocurrency-fraud investigation: trace funds from a seized Bitcoin wallet, de-anonymize the suspect, and answer six evidence questions. The HTB lab provides an in-browser investigation environment with commercial-grade analytics tools, so the work is done inside that environment rather than with external scripts. Each answer unlocks the context for the next, following the standard money-trail progression: cluster the addresses, quantify the fraud, detect obfuscation, then pivot from on-chain data to the suspect's real-world identity and location via exchange KYC records.
+The scenario is a cryptocurrency-fraud investigation: trace funds from a seized Bitcoin wallet, de-anonymize the suspect, and answer six evidence questions. 
+The HTB lab provides an in-browser investigation environment with commercial-grade analytics tools, so the work is done inside that environment rather than with external scripts.
+Each answer unlocks the context for the next, following the standard money-trail progression: cluster the addresses, quantify the fraud, detect obfuscation, then pivot from on-chain data to the suspect's real-world identity and location via exchange KYC records.
 
 The lab's browser gives access to:
 Crystal Analytics	Network graphing and address clustering; identifies the funding exchange
