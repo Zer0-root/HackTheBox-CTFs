@@ -1,132 +1,105 @@
-HackTheBox Sherlock: Dream Job-2 Writeup
-Date: March 2026  
+HTB Sherlock — Dream Job-2 (Tasks 11–12)
+Category	Type	Platform	Date compiled
+DFIR / Malware analysis	Sherlock	Hack The Box	March 2026
 
-Objective
-This writeup documents the complete forensic investigation performed on HackTheBox Sherlock Dream Job-2, a scenario simulating the real-world Lazarus Group (G0032) campaign known as Operation Dream Job.
-The focus was on static analysis of weaponized Office documents used as initial access vectors to deliver DRATzarus (S0694) RAT.  
-All activities were conducted exclusively in Kali Linux using command-line tools to demonstrate DFIR skills, OOXML forensics, VBA macro analysis, and MITRE ATT&CK mapping.
+Skills demonstrated: OOXML document forensics, metadata extraction, static VBA macro analysis with oletools, MITRE ATT&CK mapping.
 
-Campaign Context & MITRE ATT&CK Mapping
-Threat Actor: Lazarus Group (G0032) – North Korean state-sponsored APT.  
-Campaign: Operation Dream Job (2020–ongoing) – spear-phishing via fake job offers targeting defense/aerospace sectors.  
-Key Malware: DRATzarus (S0694) – advanced RAT used for persistence and C2.  
+Scope: this write-up covers Tasks 11 and 12 only. Earlier tasks were threat-intelligence questions answered from open-source research and are summarized under Threat-intelligence context.
 
-Relevant Techniques:  
+Summary
 
-  - T1566.001 (Phishing: Spearphishing Attachment)  
+The Sherlock models the Lazarus Group "Operation Dream Job" campaign, which uses fake job offers as phishing lures. Two lure artifacts were analyzed statically on Kali Linux without being executed:
 
-  - T1204.002 (User Execution: Malicious File)  
+Task 11: the .docx lure's OOXML core properties record Challenger as the last modifier.
+Task 12: the 17.dotm macro-enabled template contains a VBA macro that creates the Word startup directory AppData\Roaming\Microsoft\Word\STARTUP. Templates placed there load automatically each time Word starts, which provides persistence.
+Tools
+Tool	Use
+unzip	Extracting parts from the OOXML (ZIP) container
+exiftool	Reading document metadata
+oletools (olevba, oleid)	Extracting and decompressing VBA macro source; indicator triage
+strings, grep	Initial artifact search (limited on compressed content; see below)
+Investigation
+Task 11 — Who last modified the lure document?
 
-  - T1137 (Office Application Startup)  
+File: Salary_Lockheed_Martin_job_opportunities_confidential.docx
 
-  - T1547 (Boot or Logon Autostart Execution)  
+.docx files are ZIP archives, so strings on the raw file misses metadata stored in Deflate-compressed XML parts. The last-modifier value is in docProps/core.xml:
 
-(Full ATT&CK references maintained throughout the analysis.)
+bash
+# Method 1: read the core properties part directly
+unzip -p Salary_Lockheed_Martin_job_opportunities_confidential.docx docProps/core.xml \
+  | grep -oP '(?<=<cp:lastModifiedBy>)[^<]+'
 
-Tools Used (Kali Linux Environment)
-unzip – for OOXML ZIP structure extraction  
-
-strings + grep – initial artifact hunting  
-
-exiftool – native metadata extraction (pre-installed)  
-
-oletools suite (olevba, oleid) – for macro inspection  
-
-No Windows tools required; all analysis CLI-native.
-
-Activities Performed (Step-by-Step Summary)
-1. Initial Research & Threat Intelligence
-Conducted open-source research on Operation Dream Job.  
-
-Identified DRATzarus (MITRE S0694) as the primary payload associated with .doc/.dotm lures.  
-
-Mapped campaign TTPs to MITRE ATT&CK framework.  
-
-Prepared IOC table and evidence status tracking for reproducible analysis.
-
-2. Task 11 – “Who last modified the above document?” (.docx Analysis)
-File: Salary_Lockheed_Martin_job_opportunities_confidential.docx (Lockheed Martin job-lure document).
-
-Methods Attempted:  
-
-Initial strings + grep (insufficient – metadata is inside compressed XML).  
-
-Advanced extraction targeting OOXML structure.
-
-CLI Commands Executed:
-
-
-# Method 1: Direct extraction (recommended)
-
-unzip -p Salary_Lockheed_Martin_job_opportunities_confidential.docx docProps/core.xml | grep -oP '(?<=<cp:lastModifiedBy>)[^<]+'
-
-  
-
-# Method 2: exiftool (cleanest output)
-
+# Method 2: exiftool
 exiftool Salary_Lockheed_Martin_job_opportunities_confidential.docx | grep "Last Modified By"
 
-Finding: Challenger (confirmed via both methods and Windows Properties dialog screenshot below).
+Finding: Challenger. Both methods returned the same value.
 
-“image.png” could not be found.
- 
+Interpretation: lastModifiedBy is populated from the Office user name on the authoring system and can be set to any value. It shows which account name last saved the file. It does not establish the author's identity, and on its own it is not evidence of deliberate forgery.
 
-(Screenshot of “Details” tab showing “Last saved by: Challenger”)
+Task 12 — Which directory does 17.dotm create?
 
-Forensic Insight: The forged metadata was intentionally set by the attacker to increase credibility of the job-lure document – classic Lazarus social-engineering TTP.
+File: 17.dotm (macro-enabled Word template)
 
-3. Task 12 – “17.dotm” Analysis (Suspicious Folder Creation)
-File: 17.dotm (malicious Word template containing VBA macro).
+As in Task 11, strings on the raw file fails because the VBA project is inside the ZIP container. Extracting word/vbaProject.bin does not fully solve this either: the VBA source in that OLE file is stored with MS-OVBA compression, so strings sees only fragments. olevba decompresses the modules and prints the source:
 
-Methods Attempted:  
+bash
+# Confirm the file contains a VBA project
+unzip -l 17.dotm | grep -i vbaProject.bin
+oleid 17.dotm
 
-strings + grep on raw file (failed due to compressed VBA streams).  
+# Extract and decompress macro source, with indicator analysis
+olevba --decode 17.dotm
 
-Full VBA project extraction and de-obfuscation.
+# Focus on filesystem operations
+olevba 17.dotm | grep -iE 'MkDir|CreateFolder|AppData|STARTUP'
 
-CLI Commands Executed:
+Finding: the macro creates the directory C:\Users\<USER>\AppData\Roaming\Microsoft\Word\STARTUP, submitted in the task's <USER> placeholder format.
 
+Interpretation: Word loads templates in its startup folder as global templates whenever it starts. Creating this directory prepares a location for a template that runs on every Word launch, which maps to ATT&CK T1137.001 (Office Template Macros).
 
-# Extract VBA binary
+ATT&CK mapping
 
-unzip -p 17.dotm word/vbaProject.bin > vba.bin
+Observed in the analyzed artifacts:
 
-  
+Technique	Evidence
+T1566.001 — Phishing: Spearphishing Attachment	Job-lure .docx themed around a defense contractor
+T1204.002 — User Execution: Malicious File	Lure depends on the recipient opening the document and enabling content
+T1137.001 — Office Application Startup: Office Template Macros	17.dotm macro creates the Word STARTUP directory
 
-# Hunt for filesystem operations
+Campaign-level only (not observed in these tasks): T1547.001 (Registry Run Keys / Startup Folder). ATT&CK records Lazarus placing LNK files in the Windows startup folder during Operation Dream Job, but nothing in Tasks 11–12 showed it.
 
-strings vba.bin | grep -iE "MkDir|CreateFolder|AppData|Roaming|Microsoft|STARTUP"
+Threat-intelligence context
 
-  
+Sources checked as of 2026-11-22.
 
-# Alternative: Full extraction + module inspection
+Lazarus Group (G0032): described by ATT&CK as a North Korean state-sponsored group attributed to the Reconnaissance General Bureau.
+Operation Dream Job (C0022): ATT&CK records activity from September 2019 to August 2020, with Operation North Star and Operation Interception as associated names. Vendors continue to report new waves under the same name, including Check Point Research reporting through 2026, with targeting focused on the defense and aerospace sectors.
+DRATzarus (S0694): a remote access tool used by Lazarus against defense and aerospace organizations since at least summer 2020. ATT&CK's DRATzarus entry does not list Office template persistence. Within this Sherlock, the .dotm behavior is attributed to the scenario's loader, not to DRATzarus itself.
+Defensive takeaways
 
-unzip 17.dotm
+Detection
 
-strings word/_vbaProject.bin | grep -i "directory"
+Alert on file creation in %APPDATA%\Microsoft\Word\STARTUP and on new .dotm files appearing there (for example Sysmon Event ID 11, FileCreate).
+Alert on Office processes (WINWORD.EXE) creating directories or writing executable content in user profile paths.
 
-Finding: The macro creates a suspicious persistence directory immediately after <USER> (exact path extracted as AppData\Roaming\Microsoft\Word\STARTUP – submitted per placeholder format).
+Hardening
 
-Forensic Insight: Aligns with DRATzarus loader behavior (T1137 Office Application Startup).
+Block macros in files from the internet (Mark of the Web), using the Microsoft 365 default policy or Group Policy.
+Enable the Attack Surface Reduction rule "Block Office applications from creating executable content".
+Restrict trusted locations, and monitor the Word and Excel startup folders and the GlobalDotName registry value.
+Key lessons
+OOXML files are ZIP archives: inspect the parts, not the raw bytes.
+VBA in vbaProject.bin is compressed a second time inside OLE. Use olevba, not strings.
+Report metadata as observed values. A lastModifiedBy name is a lead, not an attribution.
+Keep campaign-level ATT&CK techniques separate from techniques observed in your own evidence.
+References
+MITRE ATT&CK — Lazarus Group (G0032)
+MITRE ATT&CK — Operation Dream Job (C0022)
+MITRE ATT&CK — DRATzarus (S0694)
+MITRE ATT&CK — T1137.001 Office Template Macros
+ClearSky — Operation "Dream Job" (2020)
+Check Point Research — "Shattering the Dream" (2026)
+oletools — olevba
 
-Skills Demonstrated
-Static malware analysis of OOXML files without execution.  
-
-Linux-native forensic tooling (no reliance on Windows Properties dialog).  
-
-Efficient troubleshooting of common pitfalls (strings limitations on compressed formats).  
-
-Threat intelligence integration with MITRE ATT&CK (DRATzarus S0694 citation).  
-
-Professional documentation and reproducible CLI workflows.  
-
-Cross-verification using multiple methods (unzip vs. exiftool).
-
-Conclusion & Lessons Learned
-Successfully solved Task 11 and Task 12 using pure Kali Linux CLI.  
-
-Confirmed the document was last modified by the attacker alias “Challenger”.  
-
-Identified persistence directory creation in the malicious .dotm template.  
-
-All activities directly map to real-world Lazarus Group TTPs in Operation Dream Job
+Static analysis only; no samples were executed.
