@@ -1,0 +1,132 @@
+HackTheBox Sherlock: Dream Job-2 Writeup
+Date: March 2026  
+
+Objective
+This writeup documents the complete forensic investigation performed on HackTheBox Sherlock Dream Job-2, a scenario simulating the real-world Lazarus Group (G0032) campaign known as Operation Dream Job.
+The focus was on static analysis of weaponized Office documents used as initial access vectors to deliver DRATzarus (S0694) RAT.  
+All activities were conducted exclusively in Kali Linux using command-line tools to demonstrate DFIR skills, OOXML forensics, VBA macro analysis, and MITRE ATT&CK mapping.
+
+Campaign Context & MITRE ATT&CK Mapping
+Threat Actor: Lazarus Group (G0032) – North Korean state-sponsored APT.  
+Campaign: Operation Dream Job (2020–ongoing) – spear-phishing via fake job offers targeting defense/aerospace sectors.  
+Key Malware: DRATzarus (S0694) – advanced RAT used for persistence and C2.  
+
+Relevant Techniques:  
+
+  - T1566.001 (Phishing: Spearphishing Attachment)  
+
+  - T1204.002 (User Execution: Malicious File)  
+
+  - T1137 (Office Application Startup)  
+
+  - T1547 (Boot or Logon Autostart Execution)  
+
+(Full ATT&CK references maintained throughout the analysis.)
+
+Tools Used (Kali Linux Environment)
+unzip – for OOXML ZIP structure extraction  
+
+strings + grep – initial artifact hunting  
+
+exiftool – native metadata extraction (pre-installed)  
+
+oletools suite (olevba, oleid) – for macro inspection  
+
+No Windows tools required; all analysis CLI-native.
+
+Activities Performed (Step-by-Step Summary)
+1. Initial Research & Threat Intelligence
+Conducted open-source research on Operation Dream Job.  
+
+Identified DRATzarus (MITRE S0694) as the primary payload associated with .doc/.dotm lures.  
+
+Mapped campaign TTPs to MITRE ATT&CK framework.  
+
+Prepared IOC table and evidence status tracking for reproducible analysis.
+
+2. Task 11 – “Who last modified the above document?” (.docx Analysis)
+File: Salary_Lockheed_Martin_job_opportunities_confidential.docx (Lockheed Martin job-lure document).
+
+Methods Attempted:  
+
+Initial strings + grep (insufficient – metadata is inside compressed XML).  
+
+Advanced extraction targeting OOXML structure.
+
+CLI Commands Executed:
+
+
+# Method 1: Direct extraction (recommended)
+
+unzip -p Salary_Lockheed_Martin_job_opportunities_confidential.docx docProps/core.xml | grep -oP '(?<=<cp:lastModifiedBy>)[^<]+'
+
+  
+
+# Method 2: exiftool (cleanest output)
+
+exiftool Salary_Lockheed_Martin_job_opportunities_confidential.docx | grep "Last Modified By"
+
+Finding: Challenger (confirmed via both methods and Windows Properties dialog screenshot below).
+
+“image.png” could not be found.
+ 
+
+(Screenshot of “Details” tab showing “Last saved by: Challenger”)
+
+Forensic Insight: The forged metadata was intentionally set by the attacker to increase credibility of the job-lure document – classic Lazarus social-engineering TTP.
+
+3. Task 12 – “17.dotm” Analysis (Suspicious Folder Creation)
+File: 17.dotm (malicious Word template containing VBA macro).
+
+Methods Attempted:  
+
+strings + grep on raw file (failed due to compressed VBA streams).  
+
+Full VBA project extraction and de-obfuscation.
+
+CLI Commands Executed:
+
+
+# Extract VBA binary
+
+unzip -p 17.dotm word/vbaProject.bin > vba.bin
+
+  
+
+# Hunt for filesystem operations
+
+strings vba.bin | grep -iE "MkDir|CreateFolder|AppData|Roaming|Microsoft|STARTUP"
+
+  
+
+# Alternative: Full extraction + module inspection
+
+unzip 17.dotm
+
+strings word/_vbaProject.bin | grep -i "directory"
+
+Finding: The macro creates a suspicious persistence directory immediately after <USER> (exact path extracted as AppData\Roaming\Microsoft\Word\STARTUP – submitted per placeholder format).
+
+Forensic Insight: Aligns with DRATzarus loader behavior (T1137 Office Application Startup).
+
+Skills Demonstrated
+Static malware analysis of OOXML files without execution.  
+
+Linux-native forensic tooling (no reliance on Windows Properties dialog).  
+
+Efficient troubleshooting of common pitfalls (strings limitations on compressed formats).  
+
+Threat intelligence integration with MITRE ATT&CK (DRATzarus S0694 citation).  
+
+Professional documentation and reproducible CLI workflows.  
+
+Cross-verification using multiple methods (unzip vs. exiftool).
+
+Conclusion & Lessons Learned
+Successfully solved Task 11 and Task 12 using pure Kali Linux CLI.  
+
+Confirmed the document was last modified by the attacker alias “Challenger”.  
+
+Identified persistence directory creation in the malicious .dotm template.  
+
+All activities directly map to real-world Lazarus Group TTPs in Operation Dream Job
