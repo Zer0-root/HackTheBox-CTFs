@@ -1,0 +1,184 @@
+Embryonic Plant - HTB Challenge Writeup
+Category: Crypto  
+Difficulty: Easy  
+Platform: Hack The Box  
+Date: March 2026  
+Repository Purpose: Demonstrates end-to-end crypto reversal skills, iterative problem-solving, and clear technical communication for portfolio/CTF documentation.
+
+ 1. Challenge Overview
+
+- Target: Embryonic Plant (https://app.hackthebox.com/challenges/Embryonic%20Plant)
+
+- Provided Files: `source.py` (custom RNG + encryption logic) and `output.txt` (n, s array, enc_flag)
+
+- Core Theme: Multi-prime RSA combined with a weak Linear Congruential Generator (LCG) leaking enough state to recover all parameters.
+
+- Skills Demonstrated: Code analysis, number theory (GCD, modular inverses), LCG parameter recovery, RSA private-key derivation, AES-ECB decryption, and precise flag validation.
+
+
+ 2. Enumeration & Initial Analysis
+
+- Downloaded and extracted the challenge ZIP.
+
+- Reviewed `source.py`:
+
+  - Custom `RNG` class using three primes (`p, q < r`).
+
+  - LCG update: `s = (s  p + q) % r`.
+
+  - RSA-style `d = inverse(e, phi)` with `e = 0x10001`.
+
+  - AES key derived via `SHA-256(long_to_bytes(d))`.
+
+  - Flag encrypted in AES-ECB + PKCS7 padding.
+
+- Parsed `output.txt` for large integers:
+
+  - `n` (230+ digits, three-prime modulus).
+
+  - `s` list of 5 consecutive LCG outputs.
+
+  - `enc_flag` (hex ciphertext).
+
+Key Insight: The 5 LCG states provide enough linear relationships to algebraically recover `r`, then `p` and `q`.
+
+  
+
+ 3. Exploitation Walkthrough
+
+ Step 1: Recover `r` via Discriminant GCD
+
+```python
+
+from math import gcd
+
+ ... load n and s list ...
+
+d0 = s[1] - s[0]
+
+d1 = s[2] - s[1]
+
+d2 = s[3] - s[2]
+
+D = d0  d2 - d12
+
+r = gcd(abs(D), n)
+
+```
+
+- `r` is the largest prime factor.
+
+  
+
+ Step 2: Recover `p` and `q` from LCG relations
+
+```python
+
+delta0 = (s[1] - s[0]) % r
+
+delta1 = (s[2] - s[1]) % r
+
+p = (delta1  pow(delta0, -1, r)) % r
+
+q = (s[1] - p  s[0]) % r
+
+```
+
+- Verified: `p  q  r == n` and `p < r`, `q < r`.
+
+  
+
+ Step 3: Compute RSA Private Exponent `d`
+
+```python
+
+phi = (p-1)  (q-1)  (r-1)
+
+e = 0x10001
+
+d = pow(e, -1, phi)
+
+```
+
+  
+
+ Step 4: Derive AES Key & Decrypt
+
+```python
+
+from hashlib import sha256
+
+from Crypto.Cipher import AES
+
+from Crypto.Util.Padding import unpad
+
+  
+
+key = sha256(d.to_bytes((d.bit_length() + 7) // 8, 'big')).digest()
+
+cipher = AES.new(key, AES.MODE_ECB)
+
+pt = unpad(cipher.decrypt(bytes.fromhex(enc_flag)), 16)
+
+flag = pt.decode()
+
+```
+
+  
+
+ 4. Iterative Debugging in This Thread
+
+This repository writeup captures the full conversation history with the user (HTB player):
+
+  
+
+- Initial Structured Advisory (Sections 1–8) delivered with methodology, reasoning, and defensive takeaways.
+
+- Source & Output Analysis – Corrected `sha259` typo (clearly `sha256`) and provided complete attack path.
+
+- Flags & Validation Section – Delivered concise 10-step user-end checklist.
+
+- Flag Refinement Loop:
+
+  - First decryption produced flag with spacing/typo issues.
+
+  - User reported mismatch → Identified extra spaces, missing `_`, and misplaced `$`.
+
+  - Pinpointed exact errors (e.g., "my$33d" → "my_$33d"; "@ %" → "@$%").
+
+  - Final validated flag confirmed via re-encryption match.
+
+  
+
+Demonstrated Skills: Real-time collaboration, precise error pinpointing, and clear explanations of transcription pitfalls common in CTF flag submission.
+
+  
+
+ 5. Final Flag
+
+```
+
+HTB{REDACTED}
+
+```
+
+ 6. Learning Summary & Skills Improved
+
+- Key Lessons: Custom LCGs leak parameters via simple algebra; never trust “hidden” seeds; always validate big-integer math step-by-step.
+
+- Tools Mastered: Python arbitrary-precision arithmetic, `gcd`, `pow(..., -1, mod)`, pycryptodome.
+
+- Portfolio Value: Shows ability to reverse non-standard crypto, mentor players, and produce clean, production-ready documentation.
+
+- Next Challenges Recommended: HTB “xorxorxor”, “Multimaster”, or any multi-prime RSA variant.
+
+
+ 7. Defensive Takeaways (for Blue-Team Readers)
+
+- Use cryptographically secure RNGs (`secrets`, not LCG).
+
+- Avoid leaking any state derived from secret primes.
+
+- Prefer standard RSA-OAEP or established libraries over custom schemes.
+
+```
