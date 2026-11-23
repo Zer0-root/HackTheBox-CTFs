@@ -1,0 +1,145 @@
+Baby Time Capsule - HTB Challenge Writeup
+Date: March 2026  
+
+Category: Cryptography  
+
+Difficulty: Very Easy  
+
+Platform: Hack The Box  
+
+Status: Solved (Flag obtained via pure mathematical cryptanalysis)  
+
+🎯 Challenge Summary
+Baby Time Capsule is a beginner-friendly cryptography challenge simulating a "Qubit Enterprises" time-capsule service. The server encrypts the same secret flag multiple times using fresh 1024-bit RSA public keys but with a dangerously low public exponent (e = 5).  
+
+No factoring, no padding oracle, no side-channel attacks — just a classic broadcast attack (Håstad’s broadcast attack variant) enabled by repeated plaintext and small exponent.  
+
+Skills demonstrated:
+
+RSA mechanics & low-exponent vulnerabilities
+
+Chinese Remainder Theorem (CRT) application
+
+Integer nth-root recovery
+
+Remote service enumeration & scripting
+
+Secure-vs-insecure RSA implementation analysis
+
+🔍 Enumeration & Attack Path (Condensed)
+1. Service Discovery
+Connected via nc / pwntools remote.
+
+Service returns JSON on each Y input:
+
+  ```json
+
+  {
+
+    "pubkey": { "n": "0x...", "e": 5 },
+
+    "time_capsule": "0x..."   // c = m^5 mod n
+
+  }
+
+  ```
+
+Observed: identical plaintext m (the flag) encrypted under different n but fixed e=5.
+2. Data Collection Phase
+Requested ≥3 independent (n, c) pairs.
+
+Why 3? Product of three 1024-bit moduli (N = n1 × n2 × n3) exceeds m^5 size (~2000 bits), guaranteeing exact recovery via CRT.
+
+3. Mathematical Exploitation
+Applied Chinese Remainder Theorem to solve:
+  ```
+
+  x ≡ c1 (mod n1)
+
+  x ≡ c2 (mod n2)
+
+  x ≡ c3 (mod n3)
+
+  ```
+
+  → x = m^5 (exact, no modular reduction).
+
+Computed integer 5th root of x → recovered plaintext m.
+
+Converted to bytes → flag revealed.
+
+Core exploit logic (Python snippet – full script in repo):
+
+
+from pwn import *
+
+from Crypto.Util.number import long_to_bytes
+
+from sympy.ntheory.modular import crt
+
+  
+
+# Collect 3+ (n, c) pairs
+
+ns, cs = [], []
+
+for _ in range(3):
+
+    r.sendline(b"Y")
+
+    data = json.loads(r.recvuntil(b"}").decode())
+
+    ns.append(int(data["pubkey"]["n"], 16))
+
+    cs.append(int(data["time_capsule"], 16))
+
+  
+
+# CRT → m^5
+
+x = crt(ns, cs)[0]
+
+  
+
+# Integer 5th root
+
+m = int(x ** (1/5))
+
+flag = long_to_bytes(m).decode()
+
+  
+
+print(f"[+] Flag: {flag}")
+
+🏆 Flags & Validation
+Obtained flag:  
+
+HTB{REDACTED}
+
+Submitted via HTB platform → challenge marked Solved.
+
+🛡️ Defensive Takeaways (Portfolio Highlight)
+| Issue                        | Why It Failed                  | Hardening Recommendation                  |
+
+|-----------------------------|--------------------------------|-------------------------------------------|
+
+| Fixed low exponent (e=5)  | Enables broadcast attack       | Use e=65537 or larger random coprime e |
+
+| Same plaintext reused       | Perfect power recovery possible| Add random padding / nonce per request   |
+
+| No OAEP/PKCS#1 padding     | Plaintext structure preserved  | Always use provably secure padding       |
+
+| Custom RSA implementation   | Missed edge-case assumptions   | Use battle-tested libs (cryptography.io) |
+
+Real-world detection: Rate-limit bulk encryption requests; monitor for scripted multi-key collection patterns.
+
+📚 Learning Outcomes & Next Steps
+Key lessons reinforced:
+
+RSA is not “secure by large keys alone” — implementation details matter.
+
+Low public exponents + repeated messages = instant win for attackers.
+
+CRT + integer roots are powerful offensive math tools.
+
+All activities performed strictly for educational purposes. No real systems were harmed.
