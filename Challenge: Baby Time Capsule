@@ -10,8 +10,8 @@ Collecting several ciphertexts of the same message allows Håstad's broadcast at
 Tools:
 nc / pwntools — interacting with the service and collecting ciphertexts
 Python with sympy (crt, integer_nthroot) and pycryptodome (long_to_bytes)
-Walkthrough
 
+Walkthrough:
 1. Service enumeration:
 Each Y response returns a JSON object containing a new public key and the encrypted flag:
 json
@@ -33,6 +33,7 @@ The attack needs m^5 < N, where N = n1 · n2 · n3. Then CRT recovers m^5 exactl
 Each n is about 1024 bits, so N is about 3070 bits.
 m^5 < N therefore holds whenever m is under about 614 bits (about 76 bytes). A typical flag meets this easily.
 Five ciphertexts guarantee recovery for any m < n, because each m < n_i gives m^5 < n1·…·n5. Three are enough here only because the flag is short.
+
 3. Exploitation
 Solve the system with CRT:
 x ≡ c1 (mod n1)
@@ -78,7 +79,8 @@ The integer root must be exact. A float root such as int(x ** (1/5)) fails on a 
 HTB{REDACTED}
 
 Submitted on the HTB platform; challenge marked solved.
-Root cause
+
+Root cause:
 Textbook RSA with a small exponent and repeated plaintext (CWE-780, Use of RSA Algorithm without OAEP; CWE-327, 
 Use of a Broken or Risky Cryptographic Algorithm). Without randomized padding, encryption is deterministic and the same m yields related ciphertexts under every key. The small e lets just e such ciphertexts be combined into an exact integer power.
 
@@ -86,7 +88,7 @@ Defensive takeaways:
 
 Ranked by impact:
 
-Issue	Why it failed	Fix
+Issue	Why it failed	Fix:
 No padding (textbook RSA)	Encryption is deterministic, so the same m is related across keys	Use RSA-OAEP. This alone defeats the broadcast attack, even with small e.
 Custom RSA implementation	Primitive used without the surrounding scheme	Use a vetted library's high-level API (for example cryptography's OAEP encryption)
 Small public exponent (e = 5)	Only 5 ciphertexts are needed for recovery	Use e = 65537, the standard choice, as defense in depth
