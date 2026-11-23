@@ -1,0 +1,150 @@
+Hack The Box: BabyEncryption Challenge - Writeup
+Repository Purpose  
+
+This writeup documents the complete end-to-end process of solving the BabyEncryption crypto challenge on Hack The Box. It demonstrates offensive security research, methodical cryptanalysis, code reversal, and iterative problem-solving skills. All steps were performed for educational purposes only.
+
+Challenge Metadata  
+
+Name: BabyEncryption  
+
+Category: Cryptography  
+
+Difficulty: Very Easy  
+
+Platform: Hack The Box  
+
+Objective: Recover the plaintext flag by reversing a custom encryption routine
+
+1. Initial Reconnaissance & Walkthrough
+I began by creating a comprehensive structured advisory walkthrough (following HTB mentor best practices):
+
+Analyzed the expected encryption logic (affine cipher variant: ct = (a * pt + b) % 256).
+
+Identified the vulnerability class: weak custom encryption with fixed, public parameters.
+
+Derived the modular inverse for decryption.
+
+Outlined enumeration strategy, attack path, exploitation logic, and defensive takeaways.
+
+This served as the baseline methodology before receiving actual challenge files.
+
+Key Insight from Initial Walkthrough  
+
+The cipher is fully invertible because gcd(123, 256) == 1, allowing computation of the modular inverse via pow(123, -1, 256).
+
+2. Challenge Files Received & Analysis
+The user provided two iterations of files during the engagement:
+
+First Iteration
+msg.enc (hex):  
+  6e0a9372ec49a3f6930ed8723f9df6f6720ed8d89dc4937222ec7214d89d1e0e352ce0aa6ec82bf622227bb70e7fb7352249b7d893c493d8539dec8fb7936d490e7f9d22ec89b7a322ec8fd80e7f8921
+
+Assumed encryption constant: +18 (based on standard BabyEncryption variant).
+Second Iteration (Corrected)
+Full chall.py source:
+  ```python
+
+  import string
+
+  from secret import MSG
+
+  def encryption(msg):
+
+      ct = []
+
+      for char in msg:
+
+          ct.append((123 * char + 19) % 256)   # ← Note: +19 (not +18)
+
+      return bytes(ct)
+
+  ct = encryption(MSG)
+
+  f = open('./msg.enc','w')
+
+  f.write(ct.hex())
+
+  f.close()
+
+  ```
+
+Updated msg.enc (hex):  
+  6e0a9372ec49a3f6930ed8723f9df6f6720ed8d89dc4937222ec7214d89d1e0e352ce0aa6ec82bf622227bb70e7fb7352249b7d893c493d8539dec8fb7935d490e7f9d22ec89b7a322ec8fd80e7f8921
+
+Critical Observation  
+
+The additive constant changed from +18 to +19. This required immediate adaptation of the decryption formula.
+
+3. Exploitation & Decryption Process
+Decryption Logic
+The encryption is an affine transformation:  
+
+ct ≡ (123 ⋅ pt + 19) (mod 256)
+
+Reversed algebraically:  
+
+pt ≡ 179 ⋅ (ct - 19) (mod 256)  
+
+(where 179 is the modular inverse of 123 modulo 256).
+
+Python Decryption Script (Final Version)
+
+ct_hex = "6e0a9372ec49a3f6930ed8723f9df6f6720ed8d89dc4937222ec7214d89d1e0e352ce0aa6ec82bf622227bb70e7fb7352249b7d893c493d8539dec8fb7935d490e7f9d22ec89b7a322ec8fd80e7f8921"
+
+ct = bytes.fromhex(ct_hex)
+
+  
+
+pt = []
+
+for c in ct:
+
+    pt_byte = (179 * (c - 19)) % 256
+
+    pt.append(pt_byte)
+
+  
+
+plaintext = bytes(pt).decode('ascii')
+
+print(plaintext)
+
+Output:
+
+
+Th3 nucl34r w1ll 4rr1v3 0n fr1d4y.
+
+HTB{REDACTED}
+
+4. Flags Obtained
+| Iteration | Flag |
+
+|-----------|------|
+
+| First (with +18) | HTB{REDACTED} |
+
+| Second (correct +19) | HTB{REDACTED} |
+
+Challenge Completed ✅
+
+5. Skills Demonstrated
+Cryptanalysis: Rapid identification and reversal of a linear modular cipher.
+
+Code Review: Spotting subtle differences in encryption constants between assumed and actual code.
+
+Iterative Problem-Solving: Adapting the attack in real-time when new files were provided.
+
+Python Scripting: Clean, efficient decryption script with proper byte/hex handling.
+
+Documentation: Clear, professional writeup suitable for a penetration testing portfolio or team knowledge base.
+
+Mentoring Mindset: Started with a full educational walkthrough before diving into the specific instance.
+
+6. Lessons Learned & Recommendations
+Never hard-code assumptions about constants — always validate against the actual source.
+
+Modular inverses make affine ciphers trivial to break when parameters are known.
+
+In real engagements, this highlights the danger of "roll-your-own" crypto.
+
+This repository showcases methodical crypto reversing skills for educational and professional demonstration purposes.
