@@ -12,7 +12,8 @@ Log in with the provided HTB credentials (htb / htb). If SSH refuses, it's envir
 
 bash
 ssh htb@<IP> -o StrictHostKeyChecking=no -o PreferredAuthentications=password
-Detection
+
+Detection:
 
 A system-wide preload is the first thing to check on a suspected-rootkit host:
 
