@@ -4,11 +4,11 @@ OSINT (social-media profiling)	Very Easy	Hack The Box	March 2026
 Skills demonstrated: cross-platform correlation, timeline construction, pattern recognition from fragmented public profiles.
 
 Summary:
-
-A self-contained challenge: the target influencer TechReviewer2024 has profiles on three simulated platforms hosted inside the lab — ChirpNet (X-style microblog), ConnectPro (LinkedIn-style), and ForumHub (Reddit-style). All data lives in the instance, so the work is manual browsing and correlation, not external tooling. Reusing one identity across platforms lets you pivot from a professional profile to a real name, then to a covert negative-review campaign and its coordinated bot accounts.
+A self-contained challenge: the target influencer TechReviewer2024 has profiles on three simulated platforms hosted inside the lab — ChirpNet (X-style microblog), ConnectPro (LinkedIn-style), and ForumHub (Reddit-style).
+All data lives in the instance, so the work is manual browsing and correlation, not external tooling. 
+Reusing one identity across platforms lets you pivot from a professional profile to a real name, then to a covert negative-review campaign and its coordinated bot accounts.
 
 Approach:
-
 Work the platforms in order of structured-identity value:
 ConnectPro first — the most structured identity data (name, employer, education).
 ForumHub next — operational detail (moderator role, campaign thread, internal codename).
@@ -16,7 +16,6 @@ ChirpNet last — behavioral signals (follower account-creation timing).
 Correlate shared data points across all three: the reused username ties the professional profile, the forum activity, and the microblog together.
 
 Findings:
-
 ConnectPro — identity and background
 Name: Alex Morgan ("Tech Reviewer")
 Experience: Marketing Specialist, RivalTech Inc. (Jan 2021 – Dec 2023)
@@ -34,7 +33,6 @@ Correlation;:
 The reused handle links ConnectPro's real name to the ForumHub campaign and the ChirpNet follower spike. The codename and target product tie the influencer directly to the operation; the February 2024 account-creation burst dates its start.
 
 Answers submitted:
-
 Question	Answer
 Real name	Alex Morgan
 Operation codename	operation_social_storm_2024
