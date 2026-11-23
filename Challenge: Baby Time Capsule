@@ -1,21 +1,19 @@
 HTB — Baby Time Capsule
 Category	Difficulty	Platform	Date compiled
 Cryptography	Very Easy	Hack The Box	March 2026
-
 Skills demonstrated: textbook RSA weaknesses, Chinese Remainder Theorem (CRT), exact integer root extraction, remote service scripting with pwntools.
 
-Summary
+Summary:
+The service, themed as a "Qubit Enterprises" time capsule, encrypts the same flag on every request under a freshly generated 1024-bit RSA modulus. Every key uses the fixed public exponent e = 5, and no padding is applied. 
+Collecting several ciphertexts of the same message allows Håstad's broadcast attack: CRT combines them into m^5 over the integers, and an exact integer 5th root recovers the flag. No factoring is required.
 
-The service, themed as a "Qubit Enterprises" time capsule, encrypts the same flag on every request under a freshly generated 1024-bit RSA modulus. Every key uses the fixed public exponent e = 5, and no padding is applied. Collecting several ciphertexts of the same message allows Håstad's broadcast attack: CRT combines them into m^5 over the integers, and an exact integer 5th root recovers the flag. No factoring is required.
-
-Tools
+Tools:
 nc / pwntools — interacting with the service and collecting ciphertexts
 Python with sympy (crt, integer_nthroot) and pycryptodome (long_to_bytes)
 Walkthrough
-1. Service enumeration
 
+1. Service enumeration:
 Each Y response returns a JSON object containing a new public key and the encrypted flag:
-
 json
 {
   "pubkey": { "n": "0x...", "e": 5 },
@@ -25,16 +23,13 @@ json
 time_capsule is c = m^5 mod n.
 
 Observations:
-
 The plaintext m (the flag) is identical across requests.
 n changes on every request, and e stays fixed at 5.
 Identical plaintext and identical ciphertext structure show that no randomized padding is used (textbook RSA).
+
 2. Data collection
-
 Collect at least three (n, c) pairs.
-
 The attack needs m^5 < N, where N = n1 · n2 · n3. Then CRT recovers m^5 exactly rather than m^5 mod N.
-
 Each n is about 1024 bits, so N is about 3070 bits.
 m^5 < N therefore holds whenever m is under about 614 bits (about 76 bytes). A typical flag meets this easily.
 Five ciphertexts guarantee recovery for any m < n, because each m < n_i gives m^5 < n1·…·n5. Three are enough here only because the flag is short.
@@ -48,7 +43,7 @@ Because m^5 < N, the unique solution x < N equals m^5 exactly. 2. Take the exact
 
 CRT requires pairwise-coprime moduli. If two moduli shared a prime, gcd(n_i, n_j) would factor both directly, which is a separate weakness worth checking.
 
-4. Solver
+4. Solver:
 python
 import json
 from pwn import remote
@@ -79,16 +74,15 @@ Adjust the parsing to match the service's exact output format.
 
 The integer root must be exact. A float root such as int(x ** (1/5)) fails on a ~1800-bit integer (OverflowError: int too large to convert to float). Even below that limit, a float root loses precision.
 
-5. Flag
+5. Flag:
 HTB{REDACTED}
 
 Submitted on the HTB platform; challenge marked solved.
-
 Root cause
+Textbook RSA with a small exponent and repeated plaintext (CWE-780, Use of RSA Algorithm without OAEP; CWE-327, 
+Use of a Broken or Risky Cryptographic Algorithm). Without randomized padding, encryption is deterministic and the same m yields related ciphertexts under every key. The small e lets just e such ciphertexts be combined into an exact integer power.
 
-Textbook RSA with a small exponent and repeated plaintext (CWE-780, Use of RSA Algorithm without OAEP; CWE-327, Use of a Broken or Risky Cryptographic Algorithm). Without randomized padding, encryption is deterministic and the same m yields related ciphertexts under every key. The small e lets just e such ciphertexts be combined into an exact integer power.
-
-Defensive takeaways
+Defensive takeaways:
 
 Ranked by impact:
 
@@ -100,11 +94,12 @@ Same secret re-encrypted on demand	Gives the attacker unlimited ciphertexts	Encr
 
 Detection is of limited value here, because the ciphertexts are collected through normal use. Rate-limiting encryption requests raises the cost slightly but does not fix the flaw.
 
-Key lessons
+Key lessons:
 RSA security depends on the full scheme (padding, exponent, key handling), not on key size alone.
 Small e combined with deterministic encryption of a repeated message is a direct break.
 Exact integer arithmetic matters: floating-point roots fail silently or crash on cryptographic-size integers.
-References
+
+References:
 J. Håstad, "Solving Simultaneous Modular Equations of Low Degree," SIAM Journal on Computing, 1988
 D. Boneh, "Twenty Years of Attacks on the RSA Cryptosystem", Notices of the AMS, 1999
 RFC 8017 — PKCS #1 v2.2 (RSA-OAEP)
