@@ -1,62 +1,55 @@
 HTB — Embryonic Plant
 Category	Difficulty	Platform	Date compiled
 Cryptography	Easy	Hack The Box	March 2026
-
 Skills demonstrated: source code review, Linear Congruential Generator (LCG) parameter recovery, multi-prime RSA, modular arithmetic, AES decryption with pycryptodome.
 
-Summary
+Summary:
+The challenge uses three secret primes in two roles. 
+They are the factors of a three-prime RSA modulus n = p · q · r, and they are also the parameters of an LCG, s_{i+1} = (p · s_i + q) mod r. Five consecutive LCG outputs are published alongside n. 
+Differences between the outputs reveal a multiple of r, and its GCD with n isolates r. Linear algebra modulo r then gives p and q. With the full factorization, the RSA private exponent d is computed, and the AES key derived from it decrypts the flag.
 
-The challenge uses three secret primes in two roles. They are the factors of a three-prime RSA modulus n = p · q · r, and they are also the parameters of an LCG, s_{i+1} = (p · s_i + q) mod r. Five consecutive LCG outputs are published alongside n. Differences between the outputs reveal a multiple of r, and its GCD with n isolates r. Linear algebra modulo r then gives p and q. With the full factorization, the RSA private exponent d is computed, and the AES key derived from it decrypts the flag.
-
-Tools
+Tools:
 Python 3 (arbitrary-precision integers, math.gcd, pow(x, -1, m))
 pycryptodome (AES, unpad)
-Walkthrough
+
+Walkthrough:
 1. Source code review
-
 Files: source.py (key generation and encryption) and output.txt (n, a list s of five LCG outputs, and enc_flag).
-
 source.py does the following:
-
 Generates three primes p, q, r, with p < r and q < r.
 Runs an LCG: s = (s * p + q) % r.
 Sets n = p * q * r, e = 0x10001, and d = inverse(e, phi).
 Derives an AES key as SHA-256(long_to_bytes(d)).
 Encrypts the flag with AES-ECB and PKCS#7 padding.
-
 The weakness: the LCG's multiplier, increment and modulus are the RSA prime factors, and the LCG outputs are public. Recovering the LCG parameters factors n.
 
-2. Recover r
+2. Recover:
 
+r
 Let d_i = s_{i+1} − s_i. Subtracting consecutive LCG steps removes q:
-
 d_{i+1} ≡ p · d_i   (mod r)
-
 So d0 · d2 ≡ p² · d0² ≡ d1²  (mod r). That means D = d0 · d2 − d1² is a multiple of r. Because r also divides n, gcd(D, n) yields r:
-
 python
 from math import gcd
-
 d0, d1, d2 = s[1] - s[0], s[2] - s[1], s[3] - s[2]
 D = d0 * d2 - d1 * d1
 r = gcd(abs(D), n)
 assert n % r == 0 and 1 < r < n
-
 In principle the GCD could also pick up p or q if D happened to be divisible by them. The assertion and the checks in step 3 catch that case.
 
-3. Recover p and q
+3. Recover:
+p and q
 python
 p = (d1 * pow(d0, -1, r)) % r     # multiplier
 q = (s[1] - p * s[0]) % r         # increment
-
 p and q are recovered as residues mod r. They equal the true primes because p < r and q < r.
 
 Verification:
-
 python
 assert p * q * r == n
 assert (s[3] * p + q) % r == s[4]   # the unused fifth output confirms the parameters
-4. Compute the RSA private exponent
+
+4. Compute the RSA private exponent:
 python
 e = 0x10001
 phi = (p - 1) * (q - 1) * (r - 1)
@@ -66,31 +59,31 @@ python
 from hashlib import sha256
 from Crypto.Cipher import AES
 from Crypto.Util.Padding import unpad
-
 key = sha256(d.to_bytes((d.bit_length() + 7) // 8, "big")).digest()  # = long_to_bytes(d)
 pt = unpad(AES.new(key, AES.MODE_ECB).decrypt(bytes.fromhex(enc_flag)), 16)
 print(pt.decode())
-6. Flag
+
+6. Flag:
 HTB{REDACTED}
 
-The flag contains special characters, so copy it programmatically (for example, print it and paste directly). Retyping it caused submission mismatches during the solve.
+Root cause:
 
-Root cause
+Secret key material reused as the parameters of a predictable PRNG whose output is published (CWE-338, Use of Cryptographically Weak PRNG; CWE-200, Exposure of Sensitive Information). 
+An LCG is linear: a few consecutive outputs are enough to recover its parameters. Here those parameters are the RSA factors, so the outputs leak the private key.
 
-Secret key material reused as the parameters of a predictable PRNG whose output is published (CWE-338, Use of Cryptographically Weak PRNG; CWE-200, Exposure of Sensitive Information). An LCG is linear: a few consecutive outputs are enough to recover its parameters. Here those parameters are the RSA factors, so the outputs leak the private key.
-
-Defensive takeaways
+Defensive takeaways:
 Never derive public values from secret key material. Each secret should have one purpose.
 Use a cryptographically secure generator (secrets or os.urandom) for anything security-relevant. LCG outputs are predictable from a few samples.
 Use standard schemes from vetted libraries: RSA-OAEP or hybrid encryption with an AEAD mode such as AES-GCM, not a custom KDF with AES-ECB.
-Key lessons
+
+Key lessons:
 When an LCG's outputs are public, its parameters are public too: differences remove the increment, and a determinant-style product exposes the modulus.
 A value that is a multiple of a secret factor, combined with gcd against n, is a classic factoring shortcut.
 Use spare data, here the fifth output, to verify recovered parameters before decrypting.
 
 Related practice: HTB "xorxorxor" (crypto), and other multi-prime RSA or PRNG-recovery challenges.
 
-References
+References:
 Wikipedia — Linear congruential generator
 J. Boyar, "Inferring sequences produced by pseudo-random number generators," Journal of the ACM, 1989
 Python docs — secrets module
