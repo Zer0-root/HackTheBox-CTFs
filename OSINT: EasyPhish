@@ -1,0 +1,60 @@
+HTB — Easy Phish
+Category	Difficulty	Platform	Date compiled
+OSINT (email authentication)	Very Easy	Hack The Box	March 2026
+
+Skills demonstrated: DNS TXT enumeration, SPF/DMARC analysis, email-spoofing reasoning.
+
+Challenge name: the draft titled this "The Suspicious Domain," but the domain (secure-startup.com) and flag below are HTB's Easy Phish challenge. 
+Confirm the exact name your instance shows and title the repo to match — a reader searching for "Easy Phish" won't find a file called "The Suspicious Domain," and the mismatch undercuts the write-up's credibility.
+
+Summary:
+
+The brief: "Customers of secure-startup.com have been receiving convincing phishing emails — can you figure out why?" The answer is in the domain's email-authentication DNS records.
+A permissive SPF qualifier (?all, neutral) combined with a non-enforcing DMARC policy (p=none) means receivers won't reject forged mail, so the domain is trivially spoofable. The flag is split across the two TXT records.
+
+Walkthrough:
+
+1. SPF record
+bash
+dig secure-startup.com TXT
+secure-startup.com. IN TXT "v=spf1 a mx ?all - HTB{RIP_SPF_Always_2nd"
+v=spf1 a mx ?all authorizes the domain's A and MX hosts, but ?all is the neutral qualifier: everything else is neither passed nor failed. A neutral SPF result gives receivers no basis to reject, so SPF provides no real protection here.
+The record also carries the first half of the flag.
+
+2. DMARC record
+bash
+dig _dmarc.secure-startup.com TXT
+_dmarc.secure-startup.com. IN TXT "v=DMARC1;p=none;_F1ddl3_2_DMARC}"
+p=none is monitor-only: even when SPF/DKIM fail, receivers are told to take no action. With no enforcement above a neutral SPF, forged "From: @secure-startup.com" mail sails through.
+The record carries the second half of the flag.
+
+3. Combine:
+Concatenating the two fragments gives the flag:
+
+HTB{REDACTED}
+
+Root cause:
+Email-authentication misconfiguration (no effective anti-spoofing). SPF with ?all expresses no policy on unlisted senders, and DMARC p=none enforces nothing — so neither mechanism stops a spoofed sender.
+There is no DKIM signing in the records either. The result: the domain can be impersonated in phishing against its own customers.
+
+Defensive takeaways:
+Control	Weak (observed)	Hardened
+SPF	?all (neutral)	-all (hard fail) once all legitimate senders are listed
+DMARC	p=none	p=quarantine → p=reject after monitoring
+DKIM	absent	sign outbound mail; publish the public key
+Monitoring	none	set rua=/ruf= to receive DMARC aggregate/forensic reports
+
+Move to enforcement gradually: start at p=none with rua reporting to find legitimate senders, then raise to quarantine and reject once SPF/DKIM alignment is confirmed, to avoid dropping valid mail.
+
+Key lessons:
+?all and p=none together mean "we authenticate nothing" — the combination, not either record alone, is what makes the domain spoofable.
+Email-security OSINT lives in TXT records: SPF at the domain apex, DMARC at _dmarc.<domain>, DKIM at <selector>._domainkey.<domain>.
+Here the flag was literally split across the SPF and DMARC records — always read the full TXT content, not just the policy tokens.
+
+References:
+HTB Easy Phish — community write-up (7rocky)
+RFC 7208 — Sender Policy Framework (SPF)
+RFC 7489 — DMARC
+MXToolbox — SPF/DMARC lookup
+
+Performed against an HTB challenge for educational purposes.
