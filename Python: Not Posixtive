@@ -10,7 +10,6 @@ Driving the two subprocess results to -1 and -2 — via grep exit codes 1 and 2 
 
 The target
 check_win() compares two results (debug[0], debug[1]):
-
 python
 if (debug[0] != debug[1] and
     str(debug[0]) != str(debug[1]) and
@@ -21,7 +20,6 @@ if (debug[0] != debug[1] and
 execute() runs subprocess.run([bin, switch, compl]) and returns (returncode * mode, partial_stdout). So each result is returncode × mode.
 
 Sanitization layers:
-
 python
 # mode (option 1): first 2 chars; blocks these operator chars
 operators = ['+', '-', '*', '/', '%', '=', 'x', 'o', 'b']
@@ -31,28 +29,22 @@ operators = ['+', '-', '*', '/', '%', '=', 'x', 'o', 'b']
 The three quirks that line up
 
 1. Mode = −1 without a blocked character. The blacklist omits ~. ~0 (bitwise NOT) is two characters, passes the filter, and eval('~0') is -1. Verified:
-
 python
 >>> eval('~0')
 -1
 
 2. CPython hash collision at −1. hash(-1) == hash(-2), because CPython substitutes -2 for a computed hash of -1 (the value -1 signals an error internally). Verified:
-
 python
 >>> hash(-1), hash(-2)
 (-2, -2)
-
 The full win condition with (-1, -2) holds: they are unequal, their strings differ ("-1" vs "-2"), their hashes match, and both are int.
 
 3. grep exit codes give 1 and 2. grep returns 1 when the pattern is not found in an existing file, and 2 when the file does not exist. Verified:
-
 grep ZZZ <existing-file>   -> exit 1
 grep ZZZ <missing-file>    -> exit 2
-
 grep is four letters, so it survives the binary filter; the patterns (ZZZ) and the filenames (flag.txt, fake) are letters and . only.
 
 Exploitation:
-
 With mode = -1:
 grep ZZZ flag.txt → returncode 1 → 1 × -1 = -1
 grep ZZZ fake → returncode 2 → 2 × -1 = -2
@@ -65,7 +57,6 @@ Option	Prompt	Input
 4	(switch1,switch2)>	ZZZ,ZZZ
 3	(arg1,arg2)>	flag.txt,fake
 5	—	triggers the comparison
-
 flag.txt must be a file that exists in the service's directory (so the first grep returns 1, not 2); fake must not exist.
 
 Flag:
