@@ -1,17 +1,18 @@
 HTB — BabyEncryption
 Category	Difficulty	Platform	Date compiled
 Cryptography	Very Easy	Hack The Box	March 2026
-
 Skills demonstrated: source code review, affine cipher inversion, modular arithmetic, Python byte/hex handling.
 
-Summary
+Summary:
+The challenge provides an encryption script (chall.py) and its hex-encoded output (msg.enc). 
+The script encrypts each byte with a fixed affine transformation, ct = (123 · pt + 18) mod 256. Because gcd(123, 256) = 1, the transformation is invertible.
+Computing the modular inverse of 123 and applying the inverse transformation to each byte recovers the plaintext and the flag.
 
-The challenge provides an encryption script (chall.py) and its hex-encoded output (msg.enc). The script encrypts each byte with a fixed affine transformation, ct = (123 · pt + 18) mod 256. Because gcd(123, 256) = 1, the transformation is invertible. Computing the modular inverse of 123 and applying the inverse transformation to each byte recovers the plaintext and the flag.
-
-Tools
+Tools:
 Python 3 (built-in pow(a, -1, m) for the modular inverse, available since Python 3.8)
-Walkthrough
-1. Source code review
+
+Walkthrough:
+1. Source code review:
 python
 import string
 from secret import MSG
@@ -28,56 +29,50 @@ f.write(ct.hex())
 f.close()
 
 Observations:
-
 Each plaintext byte is encrypted on its own with the same fixed parameters a = 123 and b = 18. There is no key, IV or position dependence.
 The result is an affine cipher over bytes, which is in effect a fixed 256-entry substitution table.
 The output is hex-encoded into msg.enc.
-2. Invertibility
 
+2. Invertibility:
 An affine map x → a·x + b (mod m) is invertible if and only if gcd(a, m) = 1. Here 123 is odd and 256 is a power of 2, so gcd(123, 256) = 1.
-
 python
 >>> pow(123, -1, 256)
 179
-
 Check: 123 · 179 = 22017 = 86 · 256 + 1.
-
 Decryption formula:
-
 pt ≡ 179 · (ct − 18)  (mod 256)
-3. Decryption
+
+3. Decryption:
 python
 ct = bytes.fromhex(open("msg.enc").read().strip())
-
 A_INV, B = pow(123, -1, 256), 18
 pt = bytes((A_INV * (c - B)) % 256 for c in ct)
-
 print(pt.decode("ascii"))
 
 Output:
-
-Th3 nucl34r w1ll 4rr1v3 0n fr1d4y.
 HTB{REDACTED}
-4. Alternative approaches
 
+4. Alternative approaches:
 These do not depend on deriving the inverse:
-
 Lookup table: precompute {(123 * p + 18) % 256: p for p in range(256)} and map each ciphertext byte back. This is simpler and works for any bijective byte map.
 Known plaintext: with the source unavailable, the known flag prefix HTB{ gives enough plaintext–ciphertext pairs to solve for a and b.
-5. Flag
-HTB{REDACTED}
-Root cause
 
+5. Flag:
+HTB{REDACTED}
+
+Root cause:
 Custom ("roll-your-own") encryption with no secret key (CWE-327, Use of a Broken or Risky Cryptographic Algorithm). The parameters are public in the source, and the cipher is a deterministic per-byte substitution. Anyone with the source decrypts directly. Even without the source, a single-byte substitution cipher falls to known-plaintext or frequency analysis.
 
-Defensive takeaways
+Defensive takeaways:
 Use a vetted authenticated encryption scheme (for example AES-GCM or ChaCha20-Poly1305) from a maintained library instead of custom arithmetic.
 Security must rest on a secret key, never on the secrecy of the algorithm (Kerckhoffs's principle).
 Per-byte deterministic encryption leaks structure: identical plaintext bytes produce identical ciphertext bytes.
-Key lessons
+
+Key lessons:
 Check invertibility first. For an affine cipher, gcd(a, m) = 1 is all it takes to decrypt.
 Derive constants from the actual source, and validate them by checking that the decrypted output is readable.
-References
+
+References:
 Python docs — pow() with a negative exponent (modular inverse)
 Wikipedia — Affine cipher
 Wikipedia — Kerckhoffs's principle
