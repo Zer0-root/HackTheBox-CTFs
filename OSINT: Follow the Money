@@ -1,0 +1,52 @@
+HTB — Follow The Money
+Category	Difficulty	Platform	Date compiled
+OSINT (blockchain forensics)	Easy	Hack The Box	March 2026
+Skills demonstrated: blockchain transaction tracing, address clustering, mixer detection, exchange-KYC attribution, tool chaining across a provided analytics environment.
+
+Summary:
+The scenario is a cryptocurrency-fraud investigation: trace funds from a seized Bitcoin wallet, de-anonymize the suspect, and answer six evidence questions. The HTB lab provides an in-browser investigation environment with commercial-grade analytics tools, so the work is done inside that environment rather than with external scripts. Each answer unlocks the context for the next, following the standard money-trail progression: cluster the addresses, quantify the fraud, detect obfuscation, then pivot from on-chain data to the suspect's real-world identity and location via exchange KYC records.
+
+The lab's browser gives access to:
+Crystal Analytics	Network graphing and address clustering; identifies the funding exchange
+OXT Advanced	Transaction-pattern analysis; CoinJoin / mixing detection
+Chainalysis KYT	Know-Your-Transaction attribution; links the address to registration data
+Arkham Intelligence	Entity and metadata resolution; geographic / temporal data
+
+All are reached from the challenge portal; no external setup is required.
+
+Investigation:
+
+Work the case in order — each finding feeds the next.
+
+Question	Tool	Where to look	Answer:
+1	Primary funding-source exchange	Crystal Analytics	Paste the primary suspect address → Network Graph; trace inbound funds to the originating exchange	[REDACTED]
+2	Total victim payment amount (BTC)	Crystal Analytics	Transaction Analysis view; sum the victim-related inbound amounts in the cluster	[REDACTED — confirm; see note]
+3	Obfuscation method	OXT Advanced	Analyze a key transaction hash; identify the mixing signature	CoinJoin
+4	Associated email	Chainalysis KYT	Query the suspect address; read the registration data linked via KYC	[REDACTED]
+5	Suspect full name	Chainalysis KYT / Crystal	Cross-reference the KYC identity against the cluster	[REDACTED]
+6	Geographic location	Arkham Intelligence	Resolve the address cluster's KYC-verified location to coordinates	[REDACTED]
+
+Starting point:
+The primary suspect address is given in the case brief (Case Overview / Wallet Seizure Data). Begin from the output of the first "clean" transaction and work outward through the cluster.
+Confirm your amount for Q2. This write-up records 12.47 BTC, but another public write-up of the same challenge reports a much smaller total (on the order of 0.0189 BTC) built from several sub-0.01 BTC inputs. Either the instance values are randomized per spawn or one figure is a transcription error — verify the total against your own Transaction Analysis view before publishing a number.
+
+Methodology notes:
+The investigation follows the classic money-trail sequence:
+Start broad — graph the full address cluster (don't trace transactions one by one in a raw explorer; clustering is what makes the links visible).
+Quantify impact — sum victim flows, watching decimal places carefully.
+Identify evasion — detect the mixing signature; CoinJoin breaks naive hop-by-hop tracing.
+Pivot to identity — a mixer is not the end of the trail; exchange KYC data collected at registration links the pseudonymous address to a person.
+Correlate off-chain — resolve the KYC identity to a name and a location.
+
+Takeaways:
+Why pseudonymity fails here. 
+Bitcoin is pseudonymous, not anonymous. The public ledger plus a single KYC touchpoint at a centralized exchange is enough to collapse an address cluster onto a real identity. 
+A mixer slows tracing but does not defeat it once the funds pass through a KYC-gated service.
+Detection (compliance / blue-team side). In production, this trail is caught by exchange-side KYT alerts on clustered, high-velocity transfers; analytics platforms flagging CoinJoin participation; 
+and correlation between on-chain activity and the KYC records held at the point of fiat on/off-ramp.
+
+References:
+Chainalysis — Crypto Investigations / Reactor
+Arkham Intelligence — blockchain explorer
+
+Performed against an HTB challenge for educational purposes.
