@@ -1,0 +1,80 @@
+HTB — Suspicious Threat
+Category	Difficulty	Platform	Date compiled
+Forensics	Very Easy	Hack The Box	March 2026
+Skills demonstrated: LD_PRELOAD / ld.so.preload rootkit detection, dynamic-linking analysis, static binary triage, forensically-sound artifact recovery.
+
+Summary:
+A Linux host runs a userland rootkit: a malicious shared object listed in /etc/ld.so.preload that hooks readdir() and fopen() in libc to hide any filesystem entry whose name begins with pr3l04d_. 
+Because the hook is injected into every dynamically linked program, normal tools (ls, find, cat) can't see the hidden data. Identifying the preload entry, analyzing the library, and then bypassing or disabling the hook reveals the hidden directory and the flag.
+
+Access:
+Log in with the provided HTB credentials (htb / htb). If SSH refuses, it's environment noise, not the challenge: clear a stale host key with ssh-keygen -R <IP>, and connect as htb (not root; the server has PermitRootLogin no) forcing password auth:
+
+bash
+ssh htb@<IP> -o StrictHostKeyChecking=no -o PreferredAuthentications=password
+Detection
+
+A system-wide preload is the first thing to check on a suspected-rootkit host:
+
+bash
+cat /etc/ld.so.preload
+# /lib/x86_64-linux-gnu/libc.hook.so.6
+
+ldd /bin/ls
+# ... /lib/x86_64-linux-gnu/libc.hook.so.6 ...
+
+/etc/ld.so.preload names a shared object loaded ahead of libc into every dynamically linked process. The entry libc.hook.so.6 is disguised to resemble a real libc version — a red flag, since legitimate systems rarely use ld.so.preload at all.
+
+Analysis:
+bash
+strings /lib/x86_64-linux-gnu/libc.hook.so.6
+# orig_readdir, orig_fopen, pr3l04d_
+
+The strings show the library resolves the real readdir/fopen (orig_* via dlsym) and filters results: any directory entry or file beginning with pr3l04d_ is hidden. 
+So the hidden artifacts are named pr3l04d_* and are invisible to any libc-linked tool while the hook is active.
+
+Recovery:
+Prefer a method that doesn't modify the evidence. The hook lives in libc, so a binary that doesn't go through the hooked libc sees the truth:
+
+bash
+# Option A (non-destructive): use a statically linked tool or raw syscalls,
+# which bypass the libc hook entirely.
+busybox find / -name '*pr3l04d*' 2>/dev/null     # if a static busybox is present
+# or list via the kernel directly:
+strace -f -e trace=getdents64 ls /var 2>&1 | grep pr3l04d
+bash
+
+# Option B (alters the host — do this only if acceptable, and copy the
+# library out first for analysis):
+cp /lib/x86_64-linux-gnu/libc.hook.so.6 /tmp/evidence.so   # preserve artifact
+sudo mv /etc/ld.so.preload /etc/ld.so.preload.bak          # disable the hook
+find / -name '*pr3l04d*' 2>/dev/null
+# -> /var/pr3l04d_/flag.txt
+cat /var/pr3l04d_/flag.txt
+
+The original write-up called its method "non-destructive" but then mv-ed the rootkit files.
+Moving files on the target is altering the evidence. For a forensics challenge, read the hidden data through a non-libc path (Option A) or, if you must disable the hook, preserve a copy of the library first (Option B).
+
+Root cause:
+
+Userland rootkit via dynamic-linker abuse (MITRE ATT&CK T1574.006, Hijack Execution Flow: Dynamic Linker Hijacking). 
+A root-level attacker placed a shared object in /etc/ld.so.preload, so it loads before libc in every dynamically linked process and can intercept standard calls to hide files. 
+It does not touch the kernel, which makes it simpler but also easier to spot: the preload file and the ldd output give it away.
+
+Defensive takeaways:
+
+File integrity: monitor /etc/ld.so.preload and /lib with AIDE or Tripwire; on most systems ld.so.preload should not exist at all, so its mere presence is an alert.
+Rootkit scanning: run rkhunter / chkrootkit on a schedule; both check ld.so.preload and preloaded libraries.
+Detection by bypass: compare directory listings from a dynamically linked tool against a statically linked one — a discrepancy exposes readdir hooking.
+Hardening: keep PermitRootLogin no and key-only SSH; audit auth.log for the access that planted the rootkit.
+
+Key lessons:
+/etc/ld.so.preload is a classic userland-rootkit foothold; check it first on a suspected host.
+A libc hook is invisible only to libc-linked programs — static binaries and raw syscalls see through it.
+"Non-destructive" means reading evidence without changing it; disabling a rootkit in place is remediation, not forensics, and should preserve artifacts first.
+
+References:
+man ld.so — /etc/ld.so.preload
+MITRE ATT&CK — T1574.006 Dynamic Linker Hijacking
+
+Performed against an HTB challenge for educational purposes.
