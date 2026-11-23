@@ -1,0 +1,67 @@
+HTB — The Last Dance
+Category	Difficulty	Platform	Date compiled
+Cryptography	Very Easy	Hack The Box	March 2026
+Skills demonstrated: stream-cipher analysis, keystream-reuse (two-time pad) attack, known-plaintext XOR recovery.
+
+Summary:
+source.py encrypts a known plaintext message and the secret flag with ChaCha20 using the same key and nonce.
+Reusing a (key, nonce) pair in a stream cipher produces the same keystream for both, which is a two-time pad. 
+XORing the known plaintext with its ciphertext recovers the keystream, and XORing that keystream against the flag ciphertext recovers the flag. No key recovery is needed.
+
+Analysis:
+out.txt provides the nonce and two ciphertexts:
+Nonce: c4a66edfe80227b4fa24d431 (12 bytes) — not even needed for the attack
+Encrypted message (ct1, 156 bytes): hex string in out.txt
+Encrypted flag (ct2, 51 bytes): hex string in out.txt
+
+Known plaintext (hardcoded in source.py):
+Our counter agencies have intercepted your messages and a lot of your agent's identities have been exposed. In a matter of days all of them will be captured
+The known plaintext is exactly 156 bytes — the same length as ct1 — which confirms it maps to the message ciphertext and lets the full keystream be recovered.
+
+Attack:
+For a stream cipher, ciphertext = plaintext ⊕ keystream. With the keystream reused:
+keystream = plaintext ⊕ ct1          # recover keystream from the known message
+flag      = keystream[:len(ct2)] ⊕ ct2   # apply it to the flag ciphertext
+Python
+python
+pt  = b"Our counter agencies have intercepted your messages and a lot of your agent's identities have been exposed. In a matter of days all of them will be captured"
+ct1 = bytes.fromhex(open("ct1.hex").read().strip())
+ct2 = bytes.fromhex(open("ct2.hex").read().strip())
+ks   = bytes(a ^ b for a, b in zip(pt, ct1))
+flag = bytes(a ^ b for a, b in zip(ks[:len(ct2)], ct2))
+print(flag.decode())
+CyberChef (no-code alternative)
+Input the known plaintext → To Hex (no delimiter).
+XOR with the ct1 hex → full keystream (hex).
+Truncate to the first 2 × len(ct2) hex chars (102 here).
+XOR that keystream prefix with the ct2 hex.
+From Hex → UTF-8 → the flag.
+
+Flag:
+HTB{REDACTED}
+
+Reproduction note:
+Running the attack on the data as transcribed in the original draft produces one wrong byte: at the position of the 3 in ...57R3aM... ("stream"), the XOR yields a control byte (0x03) instead of 0x33. 
+Every other byte decodes correctly, so the flag is still obvious by inspection — but the published data doesn't reproduce it exactly.
+The known plaintext there (...agencies have...) is correct, so the slip is a single hex digit in ct1 or ct2 at byte index 21. 
+Re-copy that byte from the actual out.txt. For a crypto write-up the whole value is reproducibility, so paste the hex verbatim and re-run before publishing — never hand-correct the flag while leaving the data that produced it wrong.
+
+Root cause:
+Nonce reuse in a stream cipher (CWE-323, Reusing a Nonce/Key Pair in Encryption). ChaCha20's security requires a unique nonce per encryption under a given key (RFC 8439).
+Encrypting two messages with the same (key, nonce) reuses the keystream, so ct1 ⊕ ct2 = pt1 ⊕ pt2, and any known plaintext exposes the other message.
+
+Defensive takeaways:
+Never reuse a (key, nonce) pair. Use a random 96-bit nonce per message, or a strict monotonic counter, and rotate keys before the counter can wrap.
+Prefer an AEAD construction (ChaCha20-Poly1305) so reuse is both avoided and detectable through authentication.
+Catch this in review/static analysis: a hardcoded or constant nonce passed to a stream cipher is the signature.
+
+Key lessons:
+Keystream reuse turns a stream cipher into a two-time pad; one known plaintext breaks both messages.
+XOR is its own inverse — the property that makes the attack trivial.
+Verify a recovered flag by re-deriving it from the published data, not by eyeballing — a one-byte data error is easy to miss when the flag is "obvious."
+
+References:
+RFC 8439 — ChaCha20 and Poly1305
+Two-time pad / many-time pad attack (Wikipedia: one-time pad reuse)
+
+Performed against an HTB challenge for educational purposes.
