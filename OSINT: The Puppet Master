@@ -1,0 +1,55 @@
+HTB — The Puppet Master
+Category	Difficulty	Platform	Date compiled
+OSINT (image intelligence)	Very Easy	Hack The Box	March 2026
+Skills demonstrated: reverse image search, visual feature analysis, source corroboration, structured identification of a subject from a single photograph.
+
+Summary:
+The challenge provides a single photograph of an unidentified armored military vehicle and asks five questions about it: vehicle type, manufacturer, service-entry year, country of origin, and passenger capacity. 
+Reverse image search plus corroboration against manufacturer and encyclopedic sources identifies it as the Thales Bushmaster Protected Mobility Vehicle (PMV). The remaining attributes follow from the confirmed model.
+Challenge description: "An anonymous source has shared a photograph of an unidentified military armored vehicle during field operations. Your mission is to conduct a comprehensive OSINT analysis to identify this vehicle and its specifications."
+
+Approach:
+The portal has three pages: Dashboard (scenario and objective), Evidence (the photograph plus initial observations), and Challenge (the five questions).
+Record visual features first. From the image: a wheeled (4×4), high-hulled, armored personnel vehicle with a V-shaped hull profile, in a flat, open field near what appears to be a military installation.
+Reverse image search. Upload the photo to TinEye, Google Images, and Yandex. Matches lead to official defense-force social-media posts of the same vehicle.
+Confirm the model against the manufacturer's site and encyclopedic references, then read the specifications from those confirmed sources rather than from the image alone.
+
+Findings:
+Identified vehicle: Bushmaster Protected Mobility Vehicle (PMV), the New Zealand Defence Force variant.
+#	Question	Answer	Basis
+1	Vehicle type	Protected Mobility Vehicle (wheeled armored personnel carrier / MRAP-class)	Visual features + reverse-image match
+2	Manufacturer	Thales Australia	Manufacturer documentation
+3	Service-entry year	2023 (NZ variant, entered service May 2023)	Defence-force announcement
+4	Country of origin	Australia (designed and built by Thales Australia)	Manufacturer documentation
+5	Passenger capacity	[CONFIRM] — the Bushmaster is commonly cited as carrying up to ~9–10 personnel including crew; verify the exact figure the challenge accepts	Specification sheet — unverified against HTB's accepted answer
+
+Two notes on accuracy:
+
+Service-entry year depends on scope. The base Bushmaster entered Australian service in the mid-2000s; the New Zealand variant in this image entered service in 2023. 
+The challenge is keyed to the vehicle in the photo, so 2023 is the intended answer — but state which you're giving.
+Confirm the capacity figure. I have not verified the exact number HTB accepts. Read it from the manufacturer's spec sheet and match the challenge's expected format rather than submitting a remembered value.
+
+Submit the five answers on the Challenge page; 100% marks the challenge Owned.
+
+Root cause (scenario lesson):
+
+This is public-information disclosure through published imagery, not a technical exploit. A single unredacted operational photo, shared on an official social-media account, is enough to identify a specific platform and pull its full specification sheet from open sources.
+There is no "attack chain" — the data was already public; OSINT just assembled it.
+
+Defensive takeaways:
+Review imagery before publishing. Treat operational photos as potential intelligence: strip EXIF/GPS metadata, and check backgrounds for installations, signage, unit markings, and identifiable equipment.
+Mind the mosaic effect. Individually harmless posts (a vehicle here, a location tag there) combine into a precise picture. Train staff on aggregation risk.
+Run periodic self-OSINT. Reverse-image-search your own public media to see what an outside analyst could reconstruct.
+
+Note: "detecting" that an outsider reverse-image-searched a public photo isn't feasible — the image is already public. The control is at publication time, not detection.
+
+Key lessons:
+Catalog visual features before searching; they drive both the reverse-image query and the sanity check on matches.
+Use more than one reverse-image engine — TinEye, Google, and Yandex surface different sources.
+Corroborate specifications from the manufacturer or an encyclopedic source, not from the photo or an AI summary alone.
+
+References:
+Thales — Bushmaster Protected Mobility Vehicle
+Reverse image search: TinEye, Google Images, Yandex
+
+Performed against an HTB challenge for educational purposes.
