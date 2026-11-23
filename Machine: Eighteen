@@ -2,7 +2,6 @@ HTB — Eighteen
 OS	Difficulty	Role	Platform
 Windows	Easy	Active Directory Domain Controller	Hack The Box
 Skills demonstrated: MSSQL enumeration and login impersonation, offline PBKDF2 cracking, password spraying, Active Directory privilege escalation via dMSA abuse (BadSuccessor, CVE-2025-53779).
-Before publishing: confirm Eighteen has retired — HTB prohibits write-ups for active machines. This file also contains spoilers (provided and cracked credentials, a password hash, flags), redacted below. Restore them only once the box is retired.
 
 Summary:
 Starting from provided MSSQL credentials, a SQL login lacking direct database access uses EXECUTE AS LOGIN to impersonate a higher-privileged login and read an application's users table. 
@@ -16,7 +15,7 @@ Cracking: PBKDF2-HMAC-SHA256 → recovered password
 Lateral movement: password spray → WinRM as adam.scott
 Domain escalation: CreateChild on the Staff OU → dMSA creation → BadSuccessor → Domain Admin
 
-Tools
+Tools:
 impacket-mssqlclient, hashcat, netexec, evil-winrm, PowerView, and a dMSA/BadSuccessor exploitation tool (for example the SharpSuccessor / Python PoCs).
 
 1. MSSQL access:
@@ -125,12 +124,12 @@ Credentials	Weak password (rockyou-crackable) despite 600k PBKDF2 iterations	Enf
 Active Directory	CreateChild on an OU held by a non-admin	Audit and remove OU CreateChild/GenericAll grants to non-privileged principals
 Patching	Windows Server 2025 DC vulnerable to BadSuccessor	Apply the CVE-2025-53779 patch; review permissions on OUs, containers, and dMSA objects; monitor for anomalous dMSA creation and msDS-ManagedAccountPrecededByLink changes
 
-Key lessons
+Key lessons:
 EXECUTE AS LOGIN turns a weak SQL login into any login it may impersonate; impersonation rights are a privilege boundary.
 Match the hash format to the tool: Werkzeug stores a literal salt and hex digest; hashcat -m 10900 wants base64 for both the salt and the digest.
 Keep AD escalation techniques named precisely — BadSuccessor and RBCD are different primitives with different fixes.
 
-References
+References:
 Akamai — Abusing dMSA for Privilege Escalation (BadSuccessor), 2025-05-21
 Akamai — Analyzing the BadSuccessor patch (CVE-2025-53779), 2025-08
 The Hacker News — Windows Server 2025 dMSA / BadSuccessor
