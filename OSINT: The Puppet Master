@@ -24,16 +24,14 @@ Identified vehicle: Bushmaster Protected Mobility Vehicle (PMV), the New Zealand
 5	Passenger capacity	[CONFIRM] — the Bushmaster is commonly cited as carrying up to ~9–10 personnel including crew; verify the exact figure the challenge accepts	Specification sheet — unverified against HTB's accepted answer
 
 Two notes on accuracy:
-
 Service-entry year depends on scope. The base Bushmaster entered Australian service in the mid-2000s; the New Zealand variant in this image entered service in 2023. 
 The challenge is keyed to the vehicle in the photo, so 2023 is the intended answer — but state which you're giving.
 Confirm the capacity figure. I have not verified the exact number HTB accepts. Read it from the manufacturer's spec sheet and match the challenge's expected format rather than submitting a remembered value.
 
-Submit the five answers on the Challenge page; 100% marks the challenge Owned.
-
 Root cause (scenario lesson):
 
-This is public-information disclosure through published imagery, not a technical exploit. A single unredacted operational photo, shared on an official social-media account, is enough to identify a specific platform and pull its full specification sheet from open sources.
+This is public-information disclosure through published imagery, not a technical exploit. 
+A single unredacted operational photo, shared on an official social-media account, is enough to identify a specific platform and pull its full specification sheet from open sources.
 There is no "attack chain" — the data was already public; OSINT just assembled it.
 
 Defensive takeaways:
