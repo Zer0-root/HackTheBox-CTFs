@@ -1,0 +1,54 @@
+HTB — xorxorxor
+Category	Difficulty	Platform	Date compiled
+Cryptography	Very Easy	Hack The Box	March 2026
+Skills demonstrated: repeating-key XOR analysis, known-plaintext key recovery.
+
+Summary:
+challenge.py encrypts the flag with a repeating 4-byte XOR key, and output.txt holds the hex ciphertext.
+HTB flags always begin with HTB{ — exactly four bytes, the full key length — so XORing the first four ciphertext bytes with HTB{ recovers the entire key.
+Repeating that key across the ciphertext decrypts the flag. Verified end-to-end: the recovered key decrypts to clean ASCII ending in }.
+
+Analysis:
+Ciphertext (output.txt): 31 bytes, hex-encoded.
+Key: 4 bytes, repeating (modulo-4 cycling in challenge.py).
+Known plaintext: HTB{ (4 bytes) — the same length as the key.
+Because ciphertext = plaintext ⊕ key and the known prefix is exactly one key length, key = ciphertext[:4] ⊕ "HTB{" recovers the whole key with no brute force.
+
+Attack:
+python
+import binascii
+cipher = binascii.unhexlify(open("output.txt").read().strip())
+known  = b"HTB{"
+key  = bytes(cipher[i] ^ known[i] for i in range(4))          # recover 4-byte key
+full = (key * (len(cipher) // 4 + 1))[:len(cipher)]           # repeat to length
+flag = bytes(c ^ k for c, k in zip(cipher, full))            # decrypt
+print("key:", key.hex())
+print(flag.decode())
+Recovered key: 5b1eb49a
+Result: clean ASCII, HTB{...} format, ending in } — the sanity check that the key is right.
+
+Flag:
+HTB{REDACTED}
+
+Notes:
+No brute force is needed here. The 4-byte keyspace is 2³² (searchable, verifying each candidate against the HTB{…} format), but the known prefix recovers the key directly in one step.
+Without a known prefix, the same key falls to crib-dragging (guess likely substrings) or, for longer messages, splitting the ciphertext into four columns and running single-byte frequency analysis per column.
+
+Root cause:
+A short, repeating XOR key with no randomness (CWE-326, Inadequate Encryption Strength). 
+XOR with a fixed key is a trivial cipher: any known plaintext as long as the key exposes the whole key, and a predictable prefix like HTB{ supplies exactly that.
+
+Defensive takeaways:
+Don't use raw XOR with a static key as encryption. Use a vetted stream or AEAD cipher — AES-CTR or ChaCha20-Poly1305 — with a proper key and a unique nonce per message.
+Any predictable plaintext (a fixed header, a flag prefix, a file-format magic) is a known-plaintext foothold against a repeating key.
+
+Key lessons:
+A repeating-key XOR breaks the moment known plaintext reaches the key length.
+Flag formats (HTB{) are free known plaintext in CTF crypto.
+XOR is its own inverse, so key recovery and decryption are the same operation run with different operands.
+
+References:
+Repeating-key XOR / Vigenère-style analysis (Wikipedia: XOR cipher)
+Cryptopals — Break repeating-key XOR (Set 1, Challenge 6)
+
+Performed against an HTB challenge for educational purposes.
