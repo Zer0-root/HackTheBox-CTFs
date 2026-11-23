@@ -1,64 +1,53 @@
 HTB — Magical Palindrome
 Category	Difficulty	Platform	Date compiled
 Web	Very Easy	Hack The Box	March 2026
-
 Skills demonstrated: JavaScript type-coercion analysis, source code review, payload crafting under a request-size constraint.
 
-Summary
+Summary:
+The application accepts a "magical palindrome" via POST / and validates it in a Node.js backend (index.mjs). 
+The validator requires an input of length ≥ 1000, but Nginx caps request bodies at 75 bytes, so a genuine palindrome cannot be sent. 
+Because the backend never checks that the input is a string, a small JSON object with a string-valued length property satisfies every check through JavaScript type coercion and returns the flag.
 
-The application accepts a "magical palindrome" via POST / and validates it in a Node.js backend (index.mjs). The validator requires an input of length ≥ 1000, but Nginx caps request bodies at 75 bytes, so a genuine palindrome cannot be sent. Because the backend never checks that the input is a string, a small JSON object with a string-valued length property satisfies every check through JavaScript type coercion and returns the flag.
-
-Tools
+Tools:
 curl — crafting and sending exact JSON bodies
 Postman / Burp Suite — request inspection and replay
 Text editor — review of the provided index.mjs and nginx.conf
-Walkthrough
-1. Source code review
 
+Walkthrough:
+1. Source code review:
 The provided IsPalinDrome() function enforces three conditions:
-
 input.length must not be less than 1000.
 It iterates over Array(input.length).keys() and compares each character with its mirror (input[i] vs input[input.length - i - 1]).
 Each compared character must be of type string.
-
 The type check applies to the individual characters, not to the input itself. Nothing verifies that palindrome is a string, so an object is accepted.
 
-2. Configuration review
-
+2. Configuration review:
 nginx.conf sets:
-
 nginx
 client_max_body_size 75;
-
 Any body over 75 bytes is rejected with 413 Request Entity Too Large before it reaches Node.js, which rules out a real 1000-character palindrome.
 
-3. Baseline testing
+3. Baseline testing:
 Request	Result
 {"palindrome": "aba"}	Tootus Shortus (length check failed)
 1000+ character palindrome	413 from Nginx
-
 The application returns distinct error strings for each failed check, which shows exactly which condition a payload fails.
 
-4. Type-coercion bypass
-
+4. Type-coercion bypass:
 Send an object in place of a string, with length set to the string "1000":
-
 json
 {"palindrome":{"length":"1000","0":"a","999":"a"}}
 
 Why each check passes:
-
 Check	Evaluation	Result
 input.length < 1000	"1000" < 1000 → the relational operator coerces "1000" to the number 1000 → 1000 < 1000 is false	Length check passes
 Array(input.length)	Array("1000") with a single non-numeric argument creates ["1000"], an array of length 1, not 1000	Loop runs once (i = 0)
 Mirror comparison at i = 0	input[0] → "a"; input["1000" - 0 - 1] → input[999] → "a"	Equal
 Character type check	typeof "a" is "string"	Passes
-
 IsPalinDrome() returns null, and the application takes the flag path.
-
 The payload is 50 bytes, well under the 75-byte Nginx limit.
 
-5. Exploitation
+5. Exploitation:
 bash
 curl -X POST \
   -H "Content-Type: application/json" \
@@ -66,14 +55,12 @@ curl -X POST \
   http://<target>/
 
 Success indicators:
-
 HTTP 200 OK, with a body starting Hii Harry!!! followed by the flag
 No validation error strings in the response
 The payload worked consistently across instance resets
-
 Variations tested: other matching characters (for example "x") and "length":"1001" with keys "0" and "1000", which confirms that the bypass depends on the coercion and not on specific values.
 
-6. Flag
+6. Flag:
 HTB{REDACTED}
 Pitfalls
 Numeric length (1000): Array(1000) creates a 1000-slot array, so the loop runs the full 1000 iterations. input[1] is undefined, so the character type check fails.
@@ -81,14 +68,13 @@ Mismatched edge values: the values at "0" and "<length − 1>" must be identical
 Alternatives considered
 Compression or alternate encodings: rejected, because the 75-byte limit still applies to the body as sent.
 Query parameters: rejected, because the handler reads the JSON body.
-Root cause
 
-Missing input type enforcement (CWE-843, Access of Resource Using Incompatible Type, and CWE-20, Improper Input Validation). The validator trusts that palindrome is a string. JavaScript's implicit coercion in relational comparison, together with the dual behavior of the Array constructor, let an attacker-controlled object satisfy a check meant to require 1000 characters.
+Root cause:
+Missing input type enforcement (CWE-843, Access of Resource Using Incompatible Type, and CWE-20, Improper Input Validation).
+The validator trusts that palindrome is a string. JavaScript's implicit coercion in relational comparison, together with the dual behavior of the Array constructor, let an attacker-controlled object satisfy a check meant to require 1000 characters.
 
-Defensive takeaways
-
+Defensive takeaways:
 Hardening
-
 Reject non-string input before validating it:
 js
 if (typeof palindrome !== 'string') {
@@ -97,22 +83,24 @@ if (typeof palindrome !== 'string') {
 Avoid the Array(n) constructor with untrusted values. Iterate with an explicit numeric bound (for (let i = 0; i < str.length; i++)).
 Validate request bodies against a schema (for example ajv or zod) so that types are enforced at the boundary.
 
-Detection
-
+Detection:
 Alert on JSON bodies where a field expected to hold a scalar contains an object.
 In Nginx logs, look for a client whose requests switch from 413 responses to small successful POSTs, which can indicate constraint probing.
-Key lessons
+
+Key lessons:
 When source code is provided, treat it as the primary attack surface.
 Type checks on individual elements do not replace a type check on the container.
 A tight constraint (here, the body size) is often a signal about the intended path.
 
 Related practice: challenges involving JavaScript type confusion or prototype pollution.
 
-Repository contents
+Repository contents:
+
 writeup.md — this file
 payload.json — minimal bypass payload
 curl-repro.sh — reproduction script
-References
+
+References:
 MDN — Array() constructor
 MDN — Less than (<)
 Nginx — client_max_body_size
