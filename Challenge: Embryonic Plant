@@ -1,184 +1,98 @@
-Embryonic Plant - HTB Challenge Writeup
-Category: Crypto  
-Difficulty: Easy  
-Platform: Hack The Box  
-Date: March 2026  
-Repository Purpose: Demonstrates end-to-end crypto reversal skills, iterative problem-solving, and clear technical communication for portfolio/CTF documentation.
+HTB — Embryonic Plant
+Category	Difficulty	Platform	Date compiled
+Cryptography	Easy	Hack The Box	March 2026
 
- 1. Challenge Overview
+Skills demonstrated: source code review, Linear Congruential Generator (LCG) parameter recovery, multi-prime RSA, modular arithmetic, AES decryption with pycryptodome.
 
-- Target: Embryonic Plant (https://app.hackthebox.com/challenges/Embryonic%20Plant)
+Summary
 
-- Provided Files: `source.py` (custom RNG + encryption logic) and `output.txt` (n, s array, enc_flag)
+The challenge uses three secret primes in two roles. They are the factors of a three-prime RSA modulus n = p · q · r, and they are also the parameters of an LCG, s_{i+1} = (p · s_i + q) mod r. Five consecutive LCG outputs are published alongside n. Differences between the outputs reveal a multiple of r, and its GCD with n isolates r. Linear algebra modulo r then gives p and q. With the full factorization, the RSA private exponent d is computed, and the AES key derived from it decrypts the flag.
 
-- Core Theme: Multi-prime RSA combined with a weak Linear Congruential Generator (LCG) leaking enough state to recover all parameters.
+Tools
+Python 3 (arbitrary-precision integers, math.gcd, pow(x, -1, m))
+pycryptodome (AES, unpad)
+Walkthrough
+1. Source code review
 
-- Skills Demonstrated: Code analysis, number theory (GCD, modular inverses), LCG parameter recovery, RSA private-key derivation, AES-ECB decryption, and precise flag validation.
+Files: source.py (key generation and encryption) and output.txt (n, a list s of five LCG outputs, and enc_flag).
 
+source.py does the following:
 
- 2. Enumeration & Initial Analysis
+Generates three primes p, q, r, with p < r and q < r.
+Runs an LCG: s = (s * p + q) % r.
+Sets n = p * q * r, e = 0x10001, and d = inverse(e, phi).
+Derives an AES key as SHA-256(long_to_bytes(d)).
+Encrypts the flag with AES-ECB and PKCS#7 padding.
 
-- Downloaded and extracted the challenge ZIP.
+The weakness: the LCG's multiplier, increment and modulus are the RSA prime factors, and the LCG outputs are public. Recovering the LCG parameters factors n.
 
-- Reviewed `source.py`:
+2. Recover r
 
-  - Custom `RNG` class using three primes (`p, q < r`).
+Let d_i = s_{i+1} − s_i. Subtracting consecutive LCG steps removes q:
 
-  - LCG update: `s = (s  p + q) % r`.
+d_{i+1} ≡ p · d_i   (mod r)
 
-  - RSA-style `d = inverse(e, phi)` with `e = 0x10001`.
+So d0 · d2 ≡ p² · d0² ≡ d1²  (mod r). That means D = d0 · d2 − d1² is a multiple of r. Because r also divides n, gcd(D, n) yields r:
 
-  - AES key derived via `SHA-256(long_to_bytes(d))`.
-
-  - Flag encrypted in AES-ECB + PKCS7 padding.
-
-- Parsed `output.txt` for large integers:
-
-  - `n` (230+ digits, three-prime modulus).
-
-  - `s` list of 5 consecutive LCG outputs.
-
-  - `enc_flag` (hex ciphertext).
-
-Key Insight: The 5 LCG states provide enough linear relationships to algebraically recover `r`, then `p` and `q`.
-
-  
-
- 3. Exploitation Walkthrough
-
- Step 1: Recover `r` via Discriminant GCD
-
-```python
-
+python
 from math import gcd
 
- ... load n and s list ...
-
-d0 = s[1] - s[0]
-
-d1 = s[2] - s[1]
-
-d2 = s[3] - s[2]
-
-D = d0  d2 - d12
-
+d0, d1, d2 = s[1] - s[0], s[2] - s[1], s[3] - s[2]
+D = d0 * d2 - d1 * d1
 r = gcd(abs(D), n)
+assert n % r == 0 and 1 < r < n
 
-```
+In principle the GCD could also pick up p or q if D happened to be divisible by them. The assertion and the checks in step 3 catch that case.
 
-- `r` is the largest prime factor.
+3. Recover p and q
+python
+p = (d1 * pow(d0, -1, r)) % r     # multiplier
+q = (s[1] - p * s[0]) % r         # increment
 
-  
+p and q are recovered as residues mod r. They equal the true primes because p < r and q < r.
 
- Step 2: Recover `p` and `q` from LCG relations
+Verification:
 
-```python
-
-delta0 = (s[1] - s[0]) % r
-
-delta1 = (s[2] - s[1]) % r
-
-p = (delta1  pow(delta0, -1, r)) % r
-
-q = (s[1] - p  s[0]) % r
-
-```
-
-- Verified: `p  q  r == n` and `p < r`, `q < r`.
-
-  
-
- Step 3: Compute RSA Private Exponent `d`
-
-```python
-
-phi = (p-1)  (q-1)  (r-1)
-
+python
+assert p * q * r == n
+assert (s[3] * p + q) % r == s[4]   # the unused fifth output confirms the parameters
+4. Compute the RSA private exponent
+python
 e = 0x10001
-
+phi = (p - 1) * (q - 1) * (r - 1)
 d = pow(e, -1, phi)
-
-```
-
-  
-
- Step 4: Derive AES Key & Decrypt
-
-```python
-
+5. Derive the AES key and decrypt
+python
 from hashlib import sha256
-
 from Crypto.Cipher import AES
-
 from Crypto.Util.Padding import unpad
 
-  
-
-key = sha256(d.to_bytes((d.bit_length() + 7) // 8, 'big')).digest()
-
-cipher = AES.new(key, AES.MODE_ECB)
-
-pt = unpad(cipher.decrypt(bytes.fromhex(enc_flag)), 16)
-
-flag = pt.decode()
-
-```
-
-  
-
- 4. Iterative Debugging in This Thread
-
-This repository writeup captures the full conversation history with the user (HTB player):
-
-  
-
-- Initial Structured Advisory (Sections 1–8) delivered with methodology, reasoning, and defensive takeaways.
-
-- Source & Output Analysis – Corrected `sha259` typo (clearly `sha256`) and provided complete attack path.
-
-- Flags & Validation Section – Delivered concise 10-step user-end checklist.
-
-- Flag Refinement Loop:
-
-  - First decryption produced flag with spacing/typo issues.
-
-  - User reported mismatch → Identified extra spaces, missing `_`, and misplaced `$`.
-
-  - Pinpointed exact errors (e.g., "my$33d" → "my_$33d"; "@ %" → "@$%").
-
-  - Final validated flag confirmed via re-encryption match.
-
-  
-
-Demonstrated Skills: Real-time collaboration, precise error pinpointing, and clear explanations of transcription pitfalls common in CTF flag submission.
-
-  
-
- 5. Final Flag
-
-```
-
+key = sha256(d.to_bytes((d.bit_length() + 7) // 8, "big")).digest()  # = long_to_bytes(d)
+pt = unpad(AES.new(key, AES.MODE_ECB).decrypt(bytes.fromhex(enc_flag)), 16)
+print(pt.decode())
+6. Flag
 HTB{REDACTED}
 
-```
+The flag contains special characters, so copy it programmatically (for example, print it and paste directly). Retyping it caused submission mismatches during the solve.
 
- 6. Learning Summary & Skills Improved
+Root cause
 
-- Key Lessons: Custom LCGs leak parameters via simple algebra; never trust “hidden” seeds; always validate big-integer math step-by-step.
+Secret key material reused as the parameters of a predictable PRNG whose output is published (CWE-338, Use of Cryptographically Weak PRNG; CWE-200, Exposure of Sensitive Information). An LCG is linear: a few consecutive outputs are enough to recover its parameters. Here those parameters are the RSA factors, so the outputs leak the private key.
 
-- Tools Mastered: Python arbitrary-precision arithmetic, `gcd`, `pow(..., -1, mod)`, pycryptodome.
+Defensive takeaways
+Never derive public values from secret key material. Each secret should have one purpose.
+Use a cryptographically secure generator (secrets or os.urandom) for anything security-relevant. LCG outputs are predictable from a few samples.
+Use standard schemes from vetted libraries: RSA-OAEP or hybrid encryption with an AEAD mode such as AES-GCM, not a custom KDF with AES-ECB.
+Key lessons
+When an LCG's outputs are public, its parameters are public too: differences remove the increment, and a determinant-style product exposes the modulus.
+A value that is a multiple of a secret factor, combined with gcd against n, is a classic factoring shortcut.
+Use spare data, here the fifth output, to verify recovered parameters before decrypting.
 
-- Portfolio Value: Shows ability to reverse non-standard crypto, mentor players, and produce clean, production-ready documentation.
+Related practice: HTB "xorxorxor" (crypto), and other multi-prime RSA or PRNG-recovery challenges.
 
-- Next Challenges Recommended: HTB “xorxorxor”, “Multimaster”, or any multi-prime RSA variant.
+References
+Wikipedia — Linear congruential generator
+J. Boyar, "Inferring sequences produced by pseudo-random number generators," Journal of the ACM, 1989
+Python docs — secrets module
 
-
- 7. Defensive Takeaways (for Blue-Team Readers)
-
-- Use cryptographically secure RNGs (`secrets`, not LCG).
-
-- Avoid leaking any state derived from secret primes.
-
-- Prefer standard RSA-OAEP or established libraries over custom schemes.
-
-```
+Performed against an HTB challenge for educational purposes.
