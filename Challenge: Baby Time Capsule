@@ -1,145 +1,112 @@
-Baby Time Capsule - HTB Challenge Writeup
-Date: March 2026  
+HTB — Baby Time Capsule
+Category	Difficulty	Platform	Date compiled
+Cryptography	Very Easy	Hack The Box	March 2026
 
-Category: Cryptography  
+Skills demonstrated: textbook RSA weaknesses, Chinese Remainder Theorem (CRT), exact integer root extraction, remote service scripting with pwntools.
 
-Difficulty: Very Easy  
+Summary
 
-Platform: Hack The Box  
+The service, themed as a "Qubit Enterprises" time capsule, encrypts the same flag on every request under a freshly generated 1024-bit RSA modulus. Every key uses the fixed public exponent e = 5, and no padding is applied. Collecting several ciphertexts of the same message allows Håstad's broadcast attack: CRT combines them into m^5 over the integers, and an exact integer 5th root recovers the flag. No factoring is required.
 
-Status: Solved (Flag obtained via pure mathematical cryptanalysis)  
+Tools
+nc / pwntools — interacting with the service and collecting ciphertexts
+Python with sympy (crt, integer_nthroot) and pycryptodome (long_to_bytes)
+Walkthrough
+1. Service enumeration
 
-🎯 Challenge Summary
-Baby Time Capsule is a beginner-friendly cryptography challenge simulating a "Qubit Enterprises" time-capsule service. The server encrypts the same secret flag multiple times using fresh 1024-bit RSA public keys but with a dangerously low public exponent (e = 5).  
+Each Y response returns a JSON object containing a new public key and the encrypted flag:
 
-No factoring, no padding oracle, no side-channel attacks — just a classic broadcast attack (Håstad’s broadcast attack variant) enabled by repeated plaintext and small exponent.  
+json
+{
+  "pubkey": { "n": "0x...", "e": 5 },
+  "time_capsule": "0x..."
+}
 
-Skills demonstrated:
+time_capsule is c = m^5 mod n.
 
-RSA mechanics & low-exponent vulnerabilities
+Observations:
 
-Chinese Remainder Theorem (CRT) application
+The plaintext m (the flag) is identical across requests.
+n changes on every request, and e stays fixed at 5.
+Identical plaintext and identical ciphertext structure show that no randomized padding is used (textbook RSA).
+2. Data collection
 
-Integer nth-root recovery
+Collect at least three (n, c) pairs.
 
-Remote service enumeration & scripting
+The attack needs m^5 < N, where N = n1 · n2 · n3. Then CRT recovers m^5 exactly rather than m^5 mod N.
 
-Secure-vs-insecure RSA implementation analysis
+Each n is about 1024 bits, so N is about 3070 bits.
+m^5 < N therefore holds whenever m is under about 614 bits (about 76 bytes). A typical flag meets this easily.
+Five ciphertexts guarantee recovery for any m < n, because each m < n_i gives m^5 < n1·…·n5. Three are enough here only because the flag is short.
+3. Exploitation
+Solve the system with CRT:
+x ≡ c1 (mod n1)
+x ≡ c2 (mod n2)
+x ≡ c3 (mod n3)
 
-🔍 Enumeration & Attack Path (Condensed)
-1. Service Discovery
-Connected via nc / pwntools remote.
+Because m^5 < N, the unique solution x < N equals m^5 exactly. 2. Take the exact integer 5th root of x to recover m. 3. Convert m to bytes to get the flag.
 
-Service returns JSON on each Y input:
+CRT requires pairwise-coprime moduli. If two moduli shared a prime, gcd(n_i, n_j) would factor both directly, which is a separate weakness worth checking.
 
-  ```json
-
-  {
-
-    "pubkey": { "n": "0x...", "e": 5 },
-
-    "time_capsule": "0x..."   // c = m^5 mod n
-
-  }
-
-  ```
-
-Observed: identical plaintext m (the flag) encrypted under different n but fixed e=5.
-2. Data Collection Phase
-Requested ≥3 independent (n, c) pairs.
-
-Why 3? Product of three 1024-bit moduli (N = n1 × n2 × n3) exceeds m^5 size (~2000 bits), guaranteeing exact recovery via CRT.
-
-3. Mathematical Exploitation
-Applied Chinese Remainder Theorem to solve:
-  ```
-
-  x ≡ c1 (mod n1)
-
-  x ≡ c2 (mod n2)
-
-  x ≡ c3 (mod n3)
-
-  ```
-
-  → x = m^5 (exact, no modular reduction).
-
-Computed integer 5th root of x → recovered plaintext m.
-
-Converted to bytes → flag revealed.
-
-Core exploit logic (Python snippet – full script in repo):
-
-
-from pwn import *
-
+4. Solver
+python
+import json
+from pwn import remote
 from Crypto.Util.number import long_to_bytes
-
 from sympy.ntheory.modular import crt
+from sympy import integer_nthroot
 
-  
+HOST, PORT = "<target>", 1337  # replace with instance details
+E = 5
 
-# Collect 3+ (n, c) pairs
-
+r = remote(HOST, PORT)
 ns, cs = [], []
 
-for _ in range(3):
-
+while len(ns) < 3:
     r.sendline(b"Y")
-
-    data = json.loads(r.recvuntil(b"}").decode())
-
+    line = r.recvline_contains(b"{").decode()   # one JSON object per line
+    data = json.loads(line[line.index("{"):])
     ns.append(int(data["pubkey"]["n"], 16))
-
     cs.append(int(data["time_capsule"], 16))
 
-  
+x, N = crt(ns, cs)
+m, exact = integer_nthroot(int(x), E)
+assert exact, "m^e >= N: collect more ciphertexts"
 
-# CRT → m^5
+print(f"[+] Flag: {long_to_bytes(m).decode()}")
 
-x = crt(ns, cs)[0]
+Adjust the parsing to match the service's exact output format.
 
-  
+The integer root must be exact. A float root such as int(x ** (1/5)) fails on a ~1800-bit integer (OverflowError: int too large to convert to float). Even below that limit, a float root loses precision.
 
-# Integer 5th root
-
-m = int(x ** (1/5))
-
-flag = long_to_bytes(m).decode()
-
-  
-
-print(f"[+] Flag: {flag}")
-
-🏆 Flags & Validation
-Obtained flag:  
-
+5. Flag
 HTB{REDACTED}
 
-Submitted via HTB platform → challenge marked Solved.
+Submitted on the HTB platform; challenge marked solved.
 
-🛡️ Defensive Takeaways (Portfolio Highlight)
-| Issue                        | Why It Failed                  | Hardening Recommendation                  |
+Root cause
 
-|-----------------------------|--------------------------------|-------------------------------------------|
+Textbook RSA with a small exponent and repeated plaintext (CWE-780, Use of RSA Algorithm without OAEP; CWE-327, Use of a Broken or Risky Cryptographic Algorithm). Without randomized padding, encryption is deterministic and the same m yields related ciphertexts under every key. The small e lets just e such ciphertexts be combined into an exact integer power.
 
-| Fixed low exponent (e=5)  | Enables broadcast attack       | Use e=65537 or larger random coprime e |
+Defensive takeaways
 
-| Same plaintext reused       | Perfect power recovery possible| Add random padding / nonce per request   |
+Ranked by impact:
 
-| No OAEP/PKCS#1 padding     | Plaintext structure preserved  | Always use provably secure padding       |
+Issue	Why it failed	Fix
+No padding (textbook RSA)	Encryption is deterministic, so the same m is related across keys	Use RSA-OAEP. This alone defeats the broadcast attack, even with small e.
+Custom RSA implementation	Primitive used without the surrounding scheme	Use a vetted library's high-level API (for example cryptography's OAEP encryption)
+Small public exponent (e = 5)	Only 5 ciphertexts are needed for recovery	Use e = 65537, the standard choice, as defense in depth
+Same secret re-encrypted on demand	Gives the attacker unlimited ciphertexts	Encrypt once, or use hybrid encryption with a fresh symmetric key per request
 
-| Custom RSA implementation   | Missed edge-case assumptions   | Use battle-tested libs (cryptography.io) |
+Detection is of limited value here, because the ciphertexts are collected through normal use. Rate-limiting encryption requests raises the cost slightly but does not fix the flaw.
 
-Real-world detection: Rate-limit bulk encryption requests; monitor for scripted multi-key collection patterns.
+Key lessons
+RSA security depends on the full scheme (padding, exponent, key handling), not on key size alone.
+Small e combined with deterministic encryption of a repeated message is a direct break.
+Exact integer arithmetic matters: floating-point roots fail silently or crash on cryptographic-size integers.
+References
+J. Håstad, "Solving Simultaneous Modular Equations of Low Degree," SIAM Journal on Computing, 1988
+D. Boneh, "Twenty Years of Attacks on the RSA Cryptosystem", Notices of the AMS, 1999
+RFC 8017 — PKCS #1 v2.2 (RSA-OAEP)
 
-📚 Learning Outcomes & Next Steps
-Key lessons reinforced:
-
-RSA is not “secure by large keys alone” — implementation details matter.
-
-Low public exponents + repeated messages = instant win for attackers.
-
-CRT + integer roots are powerful offensive math tools.
-
-All activities performed strictly for educational purposes. No real systems were harmed.
+Performed against an HTB challenge instance for educational purposes.
